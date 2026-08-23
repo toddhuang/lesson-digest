@@ -15,8 +15,9 @@ import argparse
 
 
 def load_env():
-    """加载 .env 文件中的环境变量"""
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    """加载 .env 文件中的环境变量（从项目根目录加载）"""
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env_path = os.path.join(project_root, ".env")
     if not os.path.exists(env_path):
         return
     try:
