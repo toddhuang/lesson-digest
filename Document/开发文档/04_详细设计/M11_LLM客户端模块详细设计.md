@@ -47,12 +47,16 @@ class LLMClient:
 ```
 1. 校验 backend 参数（必须是 "local" 或 "cloud"）
 2. 获取对应适配器（local_adapter / cloud_adapter）
-3. 计算缓存键
-4. use_cache=True 且缓存存在 → 加载缓存，返回
-5. 健康检查（如果距离上次检查超过 health_check_interval 秒）
+3. Token 超限检测：
+   a. 统计 messages 总 token 数（含 system + user + 预留 max_tokens）
+   b. context_length = adapter.get_context_length()（local=8192, cloud=131072）
+   c. 如果 total_tokens > context_length → 抛出 LLMContextOverflowError，提示用户视频过长需手动拆分
+4. 计算缓存键
+5. use_cache=True 且缓存存在 → 加载缓存，返回
+6. 健康检查（如果距离上次检查超过 health_check_interval 秒）
    a. 健康检查失败 → 尝试重连
    b. 重连失败 → 抛出 LLMConnectionError
-6. 执行带重试的适配器调用：
+7. 执行带重试的适配器调用：
    for attempt in range(max_retries):
      try:
        response = adapter.chat(messages, temperature, top_p, max_tokens)
@@ -261,6 +265,7 @@ self.cloud_adapter = create_adapter("deepseek", {
 | LLMRateLimitError | 429 速率限制 | 重试（读取 Retry-After） |
 | LLMTimeoutError | 超时 | 重试（指数退避） |
 | LLMConnectionError | 连接失败/健康检查未通过 | 尝试重连，重连失败则重试或抛出 |
+| LLMContextOverflowError | 输入 token 数超过模型上下文长度 | 不重试，直接抛出，提示用户视频过长需手动拆分 |
 | InvalidBackendError | 无效后端选择 | 抛出，检查调用代码 |
 | LLMClientError | 4xx 客户端错误 | 不重试，直接抛出 |
 

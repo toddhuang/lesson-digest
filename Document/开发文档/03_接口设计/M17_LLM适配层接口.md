@@ -81,6 +81,11 @@ class LLMAdapter(ABC):
     def get_model_name(self) -> str:
         """返回模型名"""
         pass
+
+    @abstractmethod
+    def rebuild_client(self) -> None:
+        """重建底层 HTTP 客户端（用于断线重连，销毁旧连接并建立新连接）"""
+        pass
 ```
 
 ---
@@ -181,6 +186,19 @@ enc = tiktoken.get_encoding("cl100k_base")
 return len(enc.encode(text))
 ```
 
+### 3.6 rebuild_client
+
+**功能**：销毁旧的 OpenAI 客户端，重新创建新客户端（用于断线重连）。
+
+```python
+def rebuild_client(self) -> None:
+    del self._client  # 销毁旧连接
+    self._client = OpenAI(
+        base_url=self.base_url,
+        api_key="EMPTY",
+    )
+```
+
 ---
 
 ## 四、当前实现二：DeepSeekAdapter（云端 DeepSeek API）
@@ -217,6 +235,19 @@ self._client = OpenAI(
 ### 4.4 count_tokens
 
 DeepSeek 使用与 GPT 相同的 tokenizer，使用 tiktoken cl100k_base。
+
+### 4.5 rebuild_client
+
+与 VLLMAdapter 相同，销毁旧客户端并重新创建：
+
+```python
+def rebuild_client(self) -> None:
+    del self._client
+    self._client = OpenAI(
+        base_url=self.base_url,
+        api_key=self.api_key,
+    )
+```
 
 ---
 
