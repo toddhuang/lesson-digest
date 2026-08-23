@@ -1,0 +1,96 @@
+"""
+M5 文字识别模块
+文字识别业务逻辑（帧去重、缓存、时间戳管理），通过适配层调用具体OCR引擎。
+对应文档：03_接口设计/M5_文字识别模块接口.md
+"""
+
+import os
+from typing import List
+
+from utils.models import OCRFrameResult, OCRResult
+from utils.file_utils import ensure_dir, save_json, load_json
+from utils.logger import setup_logger
+from adapters.ocr_adapter import create_ocr_adapter, OCRAdapter
+
+logger = setup_logger("M5_ocr")
+
+
+class OCRRecognizer:
+    """文字识别器"""
+
+    def __init__(self, adapter_type: str = "mock", config: dict = None, cache_dir: str = "./cache/ocr"):
+        self.adapter_type = adapter_type
+        self.config = config or {}
+        self.cache_dir = cache_dir
+        self._adapter: OCRAdapter = None
+
+    def _get_adapter(self) -> OCRAdapter:
+        if self._adapter is None:
+            self._adapter = create_ocr_adapter(self.adapter_type, self.config)
+        return self._adapter
+
+    def recognize_frames(self, frame_paths: List[str], frame_timestamps: List[float],
+                         use_cache: bool = True) -> List[OCRFrameResult]:
+        """对关键帧列表进行文字识别
+
+        Args:
+            frame_paths: 关键帧图片路径列表
+            frame_timestamps: 关键帧时间戳列表（与frame_paths一一对应）
+            use_cache: 是否使用缓存
+
+        Returns:
+            OCRFrameResult 列表
+        """
+        logger.info(f"[M5] 文字识别: {len(frame_paths)}帧")
+
+        results = []
+        adapter = self._get_adapter()
+
+        for i, (frame_path, timestamp) in enumerate(zip(frame_paths, frame_timestamps)):
+            # 缓存检查
+            cache_key = os.path.splitext(os.path.basename(frame_path))[0]
+            cache_path = os.path.join(self.cache_dir, f"{cache_key}.json")
+
+            if use_cache and os.path.exists(cache_path):
+                data = load_json(cache_path)
+                frame_result = OCRFrameResult(
+                    timestamp=data["timestamp"],
+                    image_path=data["image_path"],
+                    results=[OCRResult(**r) for r in data["results"]],
+                    full_text=data["full_text"],
+                    is_duplicate=data.get("is_duplicate", False),
+                )
+            else:
+                # 调用适配层
+                ocr_results = adapter.recognize(frame_path)
+                full_text = "\n".join(r.text for r in ocr_results)
+
+                # 简单去重：与前一帧full_text比较
+                is_duplicate = False
+                if results and results[-1].full_text == full_text:
+                    is_duplicate = True
+
+                frame_result = OCRFrameResult(
+                    timestamp=timestamp,
+                    image_path=frame_path,
+                    results=ocr_results,
+                    full_text=full_text,
+                    is_duplicate=is_duplicate,
+                )
+
+                # 写入缓存
+                if use_cache:
+                    ensure_dir(self.cache_dir)
+                    save_json({
+                        "timestamp": timestamp,
+                        "image_path": frame_path,
+                        "results": [r.__dict__ for r in ocr_results],
+                        "full_text": full_text,
+                        "is_duplicate": is_duplicate,
+                    }, cache_path)
+
+            results.append(frame_result)
+            logger.info(f"[M5] 帧{i+1}/{len(frame_paths)}: t={timestamp}s, {len(frame_result.results)}条文本")
+
+        logger.info(f"[M5] 文字识别完成: {len(results)}帧")
+        return results

@@ -1,0 +1,49 @@
+# 教学视频内容提取与总结工具 - 默认配置
+
+video:
+  frame_interval: 30          # 关键帧提取间隔（秒）
+  frame_format: jpg            # 关键帧格式（jpg/png）
+  frame_quality: 90            # JPG质量（1-100）
+
+llm:
+  local:
+    base_url: "http://192.168.x.x:8000/v1"
+    model: "qwen3.6-27b-awq"
+    context_length: 8192
+  cloud:
+    base_url: "https://api.deepseek.com/v1"
+    model: "deepseek-chat"
+    context_length: 131072
+    api_key: ""                 # 从环境变量 DEEPSEEK_API_KEY 读取
+  max_retries: 5
+  health_check_interval: 30    # 健康检查间隔（秒）
+
+asr:
+  adapter_type: funasr         # ASR适配器类型（funasr/whisper/mock）
+  sample_rate: 16000
+  channels: 1
+  model_name: "paraformer-zh"
+
+ocr:
+  adapter_type: paddleocr      # OCR适配器类型（paddleocr/easyocr/mock）
+  language: "ch"
+  use_angle_cls: true
+
+output:
+  transcript_filename: "01_逐字稿.md"
+  knowledge_filename: "02_知识点清单.md"
+  mindmap_filename: "03_思维导图.opml"
+  problems_dirname: "习题"
+  screenshots_dirname: "截图"
+  timestamp_format: "mm:ss"
+
+paths:
+  cache_dir: "./cache"
+  output_dir: "./output"
+  temp_dir: "./temp"
+  log_dir: "./logs"
+
+cache:
+  cache_ocr_frames: true       # 是否缓存OCR原始帧图片
+  max_cache_size_gb: 400       # 缓存空间上限（GB）
+  llm_cache: true               # 是否缓存LLM响应
