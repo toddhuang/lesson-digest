@@ -228,6 +228,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
                 top_p=top_p,
                 max_tokens=max_tokens,
                 stream=False,
+                extra_body={"thinking": {"type": "disabled"}},  # MVP阶段禁用思考过程，避免token被思考占满
             )
         except Exception as e:
             logger.error(f"LLM 调用失败: {e}")
@@ -236,8 +237,18 @@ class OpenAICompatibleAdapter(LLMAdapter):
         choice = response.choices[0]
         usage = response.usage
 
+        content = choice.message.content or ""
+        reasoning = getattr(choice.message, "reasoning_content", None) or ""
+
+        # DeepSeek 推理模型：content 为空但 reasoning 非空，说明 max_tokens 不够
+        if not content and reasoning:
+            logger.warning(
+                f"LLM 返回 content 为空，但 reasoning_content 非空（{len(reasoning)}字符）。"
+                f"finish_reason={choice.finish_reason}，可能是 max_tokens 不够，思考过程占满了 token。"
+            )
+
         return LLMResponse(
-            content=choice.message.content or "",
+            content=content,
             model=self.model,
             usage=TokenUsage(
                 prompt_tokens=usage.prompt_tokens if usage else 0,
