@@ -10,7 +10,7 @@
 ```
 adapters/
 ├── __init__.py
-└── llm_adapter.py    # LLM 适配层（抽象基类 + VLLM + DeepSeek 实现）
+└── llm_adapter.py    # LLM 适配层（抽象基类 + Volcengine + DeepSeek + Mock 实现）
 ```
 
 ---
@@ -60,116 +60,16 @@ class LLMAdapter(ABC):
 
 ---
 
-## 三、VLLMAdapter 实现（本地 vLLM）
+## 三、VolcengineAdapter 实现（豆包，默认服务商）
 
 ### 3.1 初始化
 
 ```python
-class VLLMAdapter(LLMAdapter):
+class VolcengineAdapter(LLMAdapter):
     def __init__(self, config: dict):
-        self.base_url = config["base_url"]
-        self.model = config["model"]
-        self._context_length = config.get("context_length", 8192)
-        self._client = None
-
-    def _get_client(self):
-        if self._client is None:
-            from openai import OpenAI
-            self._client = OpenAI(
-                base_url=self.base_url,
-                api_key="EMPTY",  # vLLM 不需要 API Key
-            )
-        return self._client
-```
-
-### 3.2 chat（非流式）
-
-```python
-def chat(self, messages, temperature=0.3, top_p=0.9, max_tokens=2000, **kwargs) -> LLMResponse:
-    client = self._get_client()
-    response = client.chat.completions.create(
-        model=self.model,
-        messages=messages,
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_tokens,
-        stream=False,
-        **kwargs
-    )
-    return LLMResponse(
-        content=response.choices[0].message.content,
-        model=response.model,
-        usage=TokenUsage(
-            prompt_tokens=response.usage.prompt_tokens,
-            completion_tokens=response.usage.completion_tokens,
-            total_tokens=response.usage.total_tokens,
-        ),
-        finish_reason=response.choices[0].finish_reason,
-    )
-```
-
-### 3.3 chat_stream（流式）
-
-```python
-def chat_stream(self, messages, temperature=0.3, top_p=0.9, max_tokens=2000, **kwargs) -> Iterator[LLMChunk]:
-    client = self._get_client()
-    stream = client.chat.completions.create(
-        model=self.model,
-        messages=messages,
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_tokens,
-        stream=True,
-        **kwargs
-    )
-    for chunk in stream:
-        delta = chunk.choices[0].delta.content or ""
-        finish_reason = chunk.choices[0].finish_reason
-        usage = None
-        if chunk.usage:
-            usage = TokenUsage(
-                prompt_tokens=chunk.usage.prompt_tokens,
-                completion_tokens=chunk.usage.completion_tokens,
-                total_tokens=chunk.usage.total_tokens,
-            )
-        yield LLMChunk(
-            delta_content=delta,
-            finish_reason=finish_reason,
-            usage=usage,
-        )
-```
-
-### 3.4 count_tokens
-
-```python
-def count_tokens(self, text: str) -> int:
-    import tiktoken
-    enc = tiktoken.get_encoding("cl100k_base")
-    return len(enc.encode(text))
-```
-
-### 3.5 其他方法
-
-```python
-def get_context_length(self) -> int:
-    return self._context_length
-
-def get_model_name(self) -> str:
-    return self.model
-```
-
----
-
-## 四、DeepSeekAdapter 实现（云端 DeepSeek API）
-
-### 4.1 初始化
-
-```python
-class DeepSeekAdapter(LLMAdapter):
-    def __init__(self, config: dict):
-        self.base_url = config["base_url"]
-        self.model = config["model"]
+        self.base_url = config["base_url"]  # https://ark.cn-beijing.volces.com/api/v3
         self.api_key = config["api_key"]
+        self.model = config["model"]  # doubao-seed-2-1-pro-260628
         self._context_length = config.get("context_length", 131072)
         self._client = None
 
@@ -183,123 +83,184 @@ class DeepSeekAdapter(LLMAdapter):
         return self._client
 ```
 
-### 4.2 chat / chat_stream / count_tokens
+### 3.2 chat 实现（responses.create 接口）
 
-与 VLLMAdapter 完全相同（都使用 OpenAI SDK），区别仅在于：
-- `base_url`：DeepSeek API 地址
-- `api_key`：DeepSeek API Key
-- `_context_length`：131072（128K）
-
-为避免代码重复，可提取公共基类 `OpenAICompatibleAdapter`：
+> **重要**：豆包 seed 系列模型**不支持** `chat.completions.create` 接口（返回 404），必须使用 `responses.create` 接口。且必须**禁用思考过程**（`reasoning={"effort": "none"}`），否则 100 token 全在思考过程中，`status=incomplete`，`output_text` 为空。
 
 ```python
-class OpenAICompatibleAdapter(LLMAdapter):
-    """OpenAI 兼容 API 的公共实现（vLLM 和 DeepSeek 都兼容）"""
-    def __init__(self, base_url, model, api_key, context_length):
-        self.base_url = base_url
-        self.model = model
-        self.api_key = api_key
-        self._context_length = context_length
+def chat(self, messages, temperature=0.3, top_p=0.9, max_tokens=2000, **kwargs):
+    client = self._get_client()
+    
+    # 转换 messages 格式为 responses.create 的 input 格式
+    input_messages = []
+    for msg in messages:
+        input_messages.append({
+            "role": msg["role"],
+            "content": [{"type": "input_text", "text": msg["content"]}]
+        })
+    
+    response = client.responses.create(
+        model=self.model,
+        input=input_messages,
+        temperature=temperature,
+        top_p=top_p,
+        max_output_tokens=max_tokens,
+        reasoning={"effort": "none"},  # 禁用思考过程，必须设置
+    )
+    
+    # 解析响应
+    content = response.output_text or ""
+    usage = TokenUsage(
+        prompt_tokens=response.usage.input_tokens if response.usage else 0,
+        completion_tokens=response.usage.output_tokens if response.usage else 0,
+        total_tokens=(response.usage.input_tokens + response.usage.output_tokens) if response.usage else 0,
+    )
+    
+    return LLMResponse(
+        content=content,
+        model=self.model,
+        usage=usage,
+        finish_reason="stop",
+    )
+```
+
+### 3.3 其他方法
+
+```python
+def get_context_length(self) -> int:
+    return self._context_length
+
+def count_tokens(self, text: str) -> int:
+    import tiktoken
+    enc = tiktoken.get_encoding("cl100k_base")
+    return len(enc.encode(text))
+
+def get_model_name(self) -> str:
+    return self.model
+```
+
+---
+
+## 四、DeepSeekAdapter 实现（备选服务商）
+
+### 4.1 初始化
+
+```python
+class DeepSeekAdapter(LLMAdapter):
+    def __init__(self, config: dict):
+        self.base_url = config["base_url"]  # https://api.deepseek.com
+        self.api_key = config["api_key"]
+        self.model = config["model"]  # deepseek-v4-flash
+        self._context_length = config.get("context_length", 131072)
         self._client = None
 
-    # chat / chat_stream / count_tokens 公共实现
-    ...
+    def _get_client(self):
+        if self._client is None:
+            from openai import OpenAI
+            self._client = OpenAI(
+                base_url=self.base_url,
+                api_key=self.api_key,
+            )
+        return self._client
+```
 
-class VLLMAdapter(OpenAICompatibleAdapter):
-    def __init__(self, config):
-        super().__init__(
-            base_url=config["base_url"],
-            model=config["model"],
-            api_key="EMPTY",
-            context_length=config.get("context_length", 8192),
-        )
+### 4.2 chat 实现（chat.completions.create 接口）
 
-class DeepSeekAdapter(OpenAICompatibleAdapter):
-    def __init__(self, config):
-        super().__init__(
-            base_url=config["base_url"],
-            model=config["model"],
-            api_key=config["api_key"],
-            context_length=config.get("context_length", 131072),
-        )
+> DeepSeek 支持标准 `chat.completions.create` 接口。必须**禁用思考过程**（`extra_body={"thinking": {"type": "disabled"}}`）。
+
+```python
+def chat(self, messages, temperature=0.3, top_p=0.9, max_tokens=2000, **kwargs):
+    client = self._get_client()
+    
+    response = client.chat.completions.create(
+        model=self.model,
+        messages=messages,
+        temperature=temperature,
+        top_p=top_p,
+        max_tokens=max_tokens,
+        stream=False,
+        extra_body={"thinking": {"type": "disabled"}},  # 禁用思考过程
+    )
+    
+    content = response.choices[0].message.content or ""
+    usage = TokenUsage(
+        prompt_tokens=response.usage.prompt_tokens,
+        completion_tokens=response.usage.completion_tokens,
+        total_tokens=response.usage.total_tokens,
+    )
+    
+    return LLMResponse(
+        content=content,
+        model=self.model,
+        usage=usage,
+        finish_reason=response.choices[0].finish_reason or "stop",
+    )
 ```
 
 ---
 
-## 五、适配器工厂
+## 五、MockAdapter 实现（开发测试用）
 
 ```python
-def create_adapter(backend: str, config: dict) -> LLMAdapter:
+class MockAdapter(LLMAdapter):
+    """Mock 适配器，返回假数据，用于开发测试和链路验证"""
+    
+    def __init__(self, config: dict = None):
+        self.model = "mock-model"
+        self._context_length = 131072
+
+    def chat(self, messages, temperature=0.3, top_p=0.9, max_tokens=2000, **kwargs):
+        # 根据消息内容返回不同的假数据
+        content = "这是 Mock 适配器返回的假数据。"
+        return LLMResponse(
+            content=content,
+            model=self.model,
+            usage=TokenUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+            finish_reason="stop",
+        )
+
+    def get_context_length(self) -> int:
+        return self._context_length
+
+    def count_tokens(self, text: str) -> int:
+        return len(text) // 2  # 粗略估算
+
+    def get_model_name(self) -> str:
+        return self.model
+```
+
+---
+
+## 六、适配器工厂
+
+```python
+def create_adapter(provider_name: str, config: dict) -> LLMAdapter:
+    """根据服务商名称创建对应适配器"""
     adapters = {
-        "vllm": VLLMAdapter,
+        "volcengine": VolcengineAdapter,
         "deepseek": DeepSeekAdapter,
-        # 后续新增适配器在此注册
+        "mock": MockAdapter,
     }
-    if backend not in adapters:
-        raise ValueError(f"不支持的 LLM 后端: {backend}")
-    return adapters[backend](config)
+    if provider_name not in adapters:
+        raise ValueError(f"不支持的服务商: {provider_name}，支持: {list(adapters.keys())}")
+    return adapters[provider_name](config)
 ```
 
 ---
 
-## 六、异常映射
+## 七、关键踩坑记录
 
-OpenAI SDK 抛出的异常需要映射为项目自定义异常：
-
-```python
-from openai import APIError, APIConnectionError, RateLimitError, APITimeoutError
-
-def _map_openai_error(e: Exception) -> Exception:
-    if isinstance(e, RateLimitError):
-        return LLMRateLimitError(str(e))
-    elif isinstance(e, APITimeoutError):
-        return LLMTimeoutError(str(e))
-    elif isinstance(e, APIConnectionError):
-        return LLMError(f"连接失败: {e}")
-    elif isinstance(e, APIError):
-        status_code = getattr(e, "status_code", 500)
-        if status_code >= 500:
-            return LLMServerError(str(e))
-        else:
-            return LLMClientError(str(e))
-    else:
-        return LLMError(str(e))
-```
-
-在 chat 方法中捕获并映射：
-```python
-try:
-    response = client.chat.completions.create(...)
-except Exception as e:
-    raise _map_openai_error(e) from e
-```
+| 问题 | 原因 | 解决方案 |
+|---|---|---|
+| 豆包 seed 系列 404 | 不支持 chat.completions.create 接口 | 使用 responses.create 接口 |
+| 豆包 output_text 为空 | 思考过程占用全部 token，status=incomplete | 设置 reasoning={"effort": "none"} 禁用思考 |
+| DeepSeek 思考过程占用 token | 默认启用思考 | 设置 extra_body={"thinking": {"type": "disabled"}} |
+| 豆包 responses.create 输入格式不同 | 需要 input 数组而非 messages | 转换为 [{"role":..., "content":[{"type":"input_text","text":...}]}] |
 
 ---
 
-## 七、可扩展适配器
+## 八、依赖关系
 
-| 适配器 | 服务 | 上下文 | API 兼容 |
-|---|---|---|---|
-| VLLMAdapter | 本地 vLLM | 8K | OpenAI 兼容 |
-| DeepSeekAdapter | DeepSeek API | 128K | OpenAI 兼容 |
-| OpenAIAdapter | OpenAI API | 128K | OpenAI 原生 |
-| QwenCloudAdapter | 通义千问 | 32K+ | OpenAI 兼容 |
-
-所有 OpenAI 兼容的服务都可以继承 `OpenAICompatibleAdapter`，只需配置不同的 base_url 和 api_key。
-
----
-
-## 八、测试要点
-
-1. VLLM 非流式调用
-2. VLLM 流式调用
-3. DeepSeek 非流式调用
-4. DeepSeek 流式调用
-5. token 计数
-6. 上下文长度获取
-7. 异常映射（超时/429/5xx/4xx）
-8. 适配器工厂创建
-9. 无效后端的错误处理
-10. 流式响应的增量内容拼接
-11. API Key 从环境变量读取
-12. 连接失败的错误处理
+- **被依赖**：M11 LLM 客户端模块
+- **依赖**：无（底层适配层）
+- **第三方依赖**：openai（SDK，兼容豆包和 DeepSeek 的 OpenAI 兼容接口）、tiktoken（token 计数）

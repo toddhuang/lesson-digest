@@ -9,9 +9,9 @@
 
 ```
 core/
-└── llm_client.py            # LLM 客户端业务模块
+└── llm_client.py            # LLM 客户端业务模块（多服务商管理）
 adapters/
-└── llm_adapter.py           # LLM 适配层（VLLMAdapter / DeepSeekAdapter）
+└── llm_adapter.py           # LLM 适配层（VolcengineAdapter / DeepSeekAdapter / MockAdapter）
 ```
 
 ---
@@ -24,19 +24,28 @@ adapters/
 class LLMClient:
     def __init__(self, config: LLMConfig):
         self.config = config
-        self.local_adapter = create_adapter("vllm", config.local.__dict__)
-        self.cloud_adapter = create_adapter("deepseek", config.cloud.__dict__)
+        self.default_provider = config.default_provider  # "volcengine" / "deepseek"
+        self.providers = {}  # provider_name -> LLMAdapter
         self.max_retries = config.max_retries
         self._cache_dir = "./cache/llm"
-        self._health_status = {"local": None, "cloud": None}  # 健康状态缓存
+        self._init_providers()
 
-    def chat(self, messages, backend, temperature=0.3, top_p=0.9, max_tokens=2000, use_cache=True) -> LLMResponse
-    def chat_stream(self, messages, backend, temperature=0.3, top_p=0.9, max_tokens=2000) -> Iterator[LLMChunk]
-    def health_check(self, backend) -> bool
-    def reconnect(self, backend) -> bool
-    def count_tokens(self, text, backend="local") -> int
-    def get_context_length(self, backend) -> int
+    def _init_providers(self):
+        """根据配置初始化所有服务商适配器"""
+        for name, provider_config in self.config.providers.items():
+            if provider_config.enabled:
+                self.providers[name] = create_adapter(name, provider_config.__dict__)
+
+    def chat(self, messages, backend="cloud", temperature=0.3, top_p=0.9,
+             max_tokens=2000, use_cache=True, provider=None) -> LLMResponse
+    def chat_stream(self, messages, backend="cloud", temperature=0.3,
+                    top_p=0.9, max_tokens=2000, provider=None) -> Iterator[LLMChunk]
+    def count_tokens(self, text) -> int
+    def get_context_length(self, provider=None) -> int
+    def get_available_providers(self) -> List[str]
 ```
+
+> **重要变更**：移除 `local_adapter`、`health_check`、`reconnect` 方法。纯云端架构，不再使用本地 vLLM。`backend="cloud"` 映射到 `default_provider`（默认 volcengine/豆包）。
 
 ---
 
@@ -45,18 +54,17 @@ class LLMClient:
 ### 3.1 chat 流程
 
 ```
-1. 校验 backend 参数（必须是 "local" 或 "cloud"）
-2. 获取对应适配器（local_adapter / cloud_adapter）
+1. 确定服务商：
+   a. 如果指定 provider 参数 → 使用该服务商
+   b. 否则使用 default_provider（默认 volcengine/豆包）
+2. 获取对应适配器（self.providers[provider_name]）
 3. Token 超限检测：
    a. 统计 messages 总 token 数（含 system + user + 预留 max_tokens）
-   b. context_length = adapter.get_context_length()（local=8192, cloud=131072）
-   c. 如果 total_tokens > context_length → 抛出 LLMContextOverflowError，提示用户视频过长需手动拆分
+   b. context_length = adapter.get_context_length()（豆包=131072, DeepSeek=131072）
+   c. 如果 total_tokens > context_length → 抛出 LLMContextOverflowError
 4. 计算缓存键
 5. use_cache=True 且缓存存在 → 加载缓存，返回
-6. 健康检查（如果距离上次检查超过 health_check_interval 秒）
-   a. 健康检查失败 → 尝试重连
-   b. 重连失败 → 抛出 LLMConnectionError
-7. 执行带重试的适配器调用：
+6. 执行带重试的适配器调用：
    for attempt in range(max_retries):
      try:
        response = adapter.chat(messages, temperature, top_p, max_tokens)
@@ -73,226 +81,85 @@ class LLMClient:
 8. 返回 LLMResponse
 ```
 
-### 3.2 chat_stream 流程
-
-流式调用不使用缓存，直接调用适配器：
+### 3.2 服务商选择逻辑
 
 ```python
-def chat_stream(self, messages, backend, ...):
-    # 校验 backend
-    adapter = self.local_adapter if backend == "local" else self.cloud_adapter
-    # 健康检查（同 chat）
-    # 流式调用不做重试（流已经开始后失败难以重试）
-    return adapter.chat_stream(messages, temperature, top_p, max_tokens)
-```
-
-流式调用的重试较复杂，MVP 阶段流式调用不做重试，失败直接抛出。
-
----
-
-## 四、健康检查机制
-
-### 4.1 health_check 实现
-
-```python
-def health_check(self, backend: str) -> bool:
-    adapter = self.local_adapter if backend == "local" else self.cloud_adapter
-    try:
-        # 发送极简请求，3秒超时
-        response = adapter.chat(
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=1,
-            timeout=3
-        )
-        self._health_status[backend] = time.time()
-        return True
-    except Exception:
-        self._health_status[backend] = None
-        return False
-```
-
-### 4.2 健康检查触发时机
-
-| 时机 | 说明 |
-|---|---|
-| 流水线启动时 | 检查 local 和 cloud 两个后端，记录初始健康状态 |
-| 每次 chat 调用前 | 如果距离上次检查超过 `health_check_interval`（默认30秒），重新检查 |
-| 调用失败时 | 立即触发健康检查，判断是服务故障还是临时网络问题 |
-| 手动调用 | `pipeline.health_check()` 可手动触发 |
-
-### 4.3 健康状态缓存
-
-```python
-self._health_status = {
-    "local": 1724563200.0,  # 上次健康检查通过的时间戳，None=不健康
-    "cloud": 1724563200.0,
-}
+def _get_provider(self, backend: str, provider: Optional[str] = None) -> str:
+    if provider:
+        if provider not in self.providers:
+            raise LLMError(f"服务商 {provider} 未配置或未启用")
+        return provider
+    # backend="cloud" 映射到 default_provider
+    if backend == "cloud":
+        return self.default_provider
+    raise LLMError(f"不支持的 backend: {backend}，纯云端架构仅支持 backend='cloud'")
 ```
 
 ---
 
-## 五、断线重连机制
+## 四、缓存机制
 
-### 5.1 reconnect 实现
+### 4.1 缓存键
 
-```python
-def reconnect(self, backend: str) -> bool:
-    adapter = self.local_adapter if backend == "local" else self.cloud_adapter
-    # 重建适配器客户端（销毁旧连接，建立新连接）
-    adapter.rebuild_client()
-    # 重连后立即做健康检查
-    return self.health_check(backend)
+```
+cache_key = md5(provider + model + messages_json + temperature + top_p + max_tokens)
 ```
 
-### 5.2 重连触发条件
+### 4.2 缓存格式
 
-| 条件 | 处理 |
-|---|---|
-| 健康检查失败 | 自动尝试重连1次，重连成功则继续，失败则抛出 LLMConnectionError |
-| 调用时连接被重置 | 计入重试，重试前自动尝试重连 |
-| vLLM 服务重启 | 健康检查检测到不可达，自动重连 |
-| 网络临时中断 | 重试机制的指数退避通常能覆盖，无需显式重连 |
-
-### 5.3 重连次数限制
-
-单次调用流程中，重连最多尝试 1 次。重连失败则抛出异常，由上层决定是否整体中断。MVP 阶段不做无限重连（避免卡死）。
-
----
-
-## 六、重试机制
-
-### 6.1 可重试异常分类
-
-```python
-RETRYABLE_EXCEPTIONS = (
-    TimeoutError,           # 网络超时
-    ConnectionError,        # 连接重置/拒绝
-    LLMServerError,         # HTTP 5xx
-    LLMRateLimitError,      # HTTP 429
-    LLMConnectionError,     # 健康检查失败/重连失败
-)
-
-NON_RETRYABLE_EXCEPTIONS = (
-    LLMClientError,         # HTTP 4xx（除429）
-    LLMContentFilterError,  # 内容过滤
-    InvalidRequestError,    # 请求参数错误
-)
-```
-
-### 6.2 指数退避
-
-```python
-def get_backoff_time(attempt: int) -> float:
-    base = 5  # 基础等待 5 秒
-    return base * (2 ** attempt)  # 5, 10, 20, 40, 80
-```
-
-### 6.3 速率限制的 Retry-After
-
-如果异常响应包含 `Retry-After` 头，使用该值作为等待时间：
-```python
-retry_after = getattr(e, "retry_after", None)
-if retry_after:
-    wait_time = max(wait_time, float(retry_after))
-```
-
----
-
-## 七、缓存机制
-
-### 7.1 缓存键
-
-```python
-def get_cache_key(messages, backend, model, temperature, top_p, max_tokens):
-    key_data = {
-        "messages": messages,
-        "backend": backend,
-        "model": model,
-        "temperature": temperature,
-        "top_p": top_p,
-        "max_tokens": max_tokens
-    }
-    return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
-```
-
-### 7.2 缓存格式
+JSON 文件，存储于 `cache/llm/{cache_key}.json`：
 
 ```json
 {
-  "response": {
-    "content": "...",
-    "model": "deepseek-chat",
-    "usage": {"prompt_tokens": 1000, "completion_tokens": 500, "total_tokens": 1500},
-    "finish_reason": "stop"
-  },
-  "backend": "cloud",
-  "created_at": "2026-08-23T10:00:00"
+  "provider": "volcengine",
+  "model": "doubao-seed-2-1-pro-260628",
+  "content": "...",
+  "usage": {"prompt_tokens": 100, "completion_tokens": 200, "total_tokens": 300},
+  "timestamp": "2026-08-23T10:00:00"
 }
 ```
 
 ---
 
-## 八、适配器初始化
+## 五、异常处理
 
-```python
-from adapters.llm_adapter import create_adapter
+| 异常类型 | 触发条件 | 处理方式 |
+|---|---|---|
+| LLMError | 通用 LLM 错误 | 抛出 |
+| LLMTimeoutError | 请求超时 | 重试（最多 max_retries 次） |
+| LLMRateLimitError | 速率限制（429） | 重试，等待 Retry-After |
+| LLMServerError | 服务端错误（5xx） | 重试 |
+| LLMConnectionError | 连接失败 | 重试 |
+| LLMContextOverflowError | Token 超出上下文长度 | 抛出，不重试 |
+| LLMResponseParseError | 响应解析失败 | 抛出 |
 
-# 本地 vLLM
-self.local_adapter = create_adapter("vllm", {
-    "base_url": config.local.base_url,
-    "model": config.local.model,
-    "context_length": config.local.context_length,
-})
+---
 
-# 云端 DeepSeek
-self.cloud_adapter = create_adapter("deepseek", {
-    "base_url": config.cloud.base_url,
-    "model": config.cloud.model,
-    "api_key": config.cloud.api_key,  # 从环境变量读取
-    "context_length": config.cloud.context_length,
-})
+## 六、配置示例
+
+```yaml
+llm:
+  default_provider: volcengine  # 默认服务商：豆包
+  max_retries: 5
+  providers:
+    volcengine:
+      enabled: true
+      api_key: "${VOLCENGINE_API_KEY}"
+      base_url: "${VOLCENGINE_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
+      model: "${VOLCENGINE_MODEL:-doubao-seed-2-1-pro-260628}"
+      context_length: 131072
+    deepseek:
+      enabled: true
+      api_key: "${DEEPSEEK_API_KEY}"
+      base_url: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
+      model: "${DEEPSEEK_MODEL:-deepseek-v4-flash}"
+      context_length: 131072
 ```
 
-适配器类型从配置的 `adapter_type` 字段读取，支持通过配置切换引擎。
-
 ---
 
-## 九、异常处理
+## 七、依赖关系
 
-| 异常 | 触发条件 | 处理方式 |
-|---|---|---|
-| LLMError | 重试耗尽后仍失败 | 抛出，中断流水线 |
-| LLMRateLimitError | 429 速率限制 | 重试（读取 Retry-After） |
-| LLMTimeoutError | 超时 | 重试（指数退避） |
-| LLMConnectionError | 连接失败/健康检查未通过 | 尝试重连，重连失败则重试或抛出 |
-| LLMContextOverflowError | 输入 token 数超过模型上下文长度 | 不重试，直接抛出，提示用户视频过长需手动拆分 |
-| InvalidBackendError | 无效后端选择 | 抛出，检查调用代码 |
-| LLMClientError | 4xx 客户端错误 | 不重试，直接抛出 |
-
----
-
-## 十、性能考虑
-
-- 本地 vLLM：延迟取决于模型和输入长度，压测显示 TPOT ~35ms/token
-- 云端 DeepSeek：网络延迟 + 推理延迟，通常 10-60 秒
-- 重试机制增加了最坏情况下的总耗时（最多 5 次重试 × 80 秒退避 = 约 7 分钟）
-- 缓存命中时耗时为 0（直接读取本地文件）
-- 健康检查增加了每次调用前的 3 秒检测（仅在超过间隔时触发）
-
----
-
-## 十一、测试要点
-
-1. 本地 vLLM 调用
-2. 云端 DeepSeek 调用
-3. 重试机制（模拟超时/5xx/429）
-4. 指数退避时间计算
-5. 缓存命中和失效
-6. 流式调用
-7. token 计数准确性
-8. 上下文长度获取
-9. 不可重试异常的直接抛出
-10. 健康检查（正常/不可达）
-11. 断线重连（模拟服务重启）
-12. 无效 backend 的错误处理
-13. 适配器类型从配置读取
+- **被依赖**：M7 知识点提取、M8 题目提取、M10 思维导图生成、M12 输出组装（ASR 纠错）、M14 工具集（ASR 纠错工具）
+- **依赖**：M17 LLM 适配层（VolcengineAdapter / DeepSeekAdapter / MockAdapter）、M1 配置管理、M14 工具集（token 计数、缓存）
+- **第三方依赖**：通过适配层间接依赖豆包 API（默认）/ DeepSeek API（备选）
