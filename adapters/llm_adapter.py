@@ -324,7 +324,7 @@ class DeepSeekAdapter(OpenAICompatibleAdapter):
         import os
         # DeepSeek 默认配置
         default_config = {
-            "base_url": "https://api.deepseek.com/v1",
+            "base_url": "https://api.deepseek.com",
             "model": "deepseek-chat",
             "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
             "context_length": 131072,

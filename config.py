@@ -229,7 +229,7 @@ class ConfigManager:
             raise ConfigError("cache.max_cache_size_gb 必须大于 0")
 
     def _load_env_vars(self) -> None:
-        """从环境变量加载敏感信息（API Key、vLLM 地址等）
+        """从环境变量加载敏感信息（API Key、模型名、服务地址等）
 
         环境变量优先级高于 config.yaml，确保敏感信息不写入配置文件。
         """
@@ -237,6 +237,16 @@ class ConfigManager:
         env_api_key = os.environ.get("DEEPSEEK_API_KEY", "")
         if env_api_key:
             self.config.llm.cloud.api_key = env_api_key
+
+        # DeepSeek 模型名（不同模型价格不同，按需配置）
+        env_deepseek_model = os.environ.get("DEEPSEEK_MODEL", "")
+        if env_deepseek_model:
+            self.config.llm.cloud.model = env_deepseek_model
+
+        # DeepSeek API 地址（一般不需要改）
+        env_deepseek_url = os.environ.get("DEEPSEEK_BASE_URL", "")
+        if env_deepseek_url:
+            self.config.llm.cloud.base_url = env_deepseek_url
 
         # 本地 vLLM 服务地址（覆盖 config.yaml 中的占位符）
         env_vllm_url = os.environ.get("VLLM_BASE_URL", "")
