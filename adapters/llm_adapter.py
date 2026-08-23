@@ -194,6 +194,146 @@ class MockLLMAdapter(LLMAdapter):
         self._client = "mock_client_rebuilt"
 
 
+class OpenAICompatibleAdapter(LLMAdapter):
+    """OpenAI 兼容 API 适配器基类（vLLM 和 DeepSeek 都基于此）"""
+
+    def __init__(self, config: dict):
+        self.base_url = config.get("base_url", "")
+        self.model = config.get("model", "")
+        self.api_key = config.get("api_key", "sk-placeholder")
+        self._context_length = config.get("context_length", 8192)
+        self._timeout = config.get("timeout", 120)
+        self._client = None
+        self._build_client()
+
+    def _build_client(self) -> None:
+        """构建 OpenAI 客户端"""
+        from openai import OpenAI
+        self._client = OpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key,
+            timeout=self._timeout,
+        )
+
+    def chat(self, messages, temperature=0.3, top_p=0.9, max_tokens=2000, **kwargs) -> LLMResponse:
+        """非流式对话"""
+        from utils.logger import setup_logger
+        logger = setup_logger("LLM")
+
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                stream=False,
+            )
+        except Exception as e:
+            logger.error(f"LLM 调用失败: {e}")
+            raise
+
+        choice = response.choices[0]
+        usage = response.usage
+
+        return LLMResponse(
+            content=choice.message.content or "",
+            model=self.model,
+            usage=TokenUsage(
+                prompt_tokens=usage.prompt_tokens if usage else 0,
+                completion_tokens=usage.completion_tokens if usage else 0,
+                total_tokens=usage.total_tokens if usage else 0,
+            ),
+            finish_reason=choice.finish_reason or "stop",
+        )
+
+    def chat_stream(self, messages, temperature=0.3, top_p=0.9, max_tokens=2000, **kwargs) -> Iterator[LLMChunk]:
+        """流式对话"""
+        try:
+            stream = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                stream=True,
+            )
+        except Exception as e:
+            from utils.logger import setup_logger
+            logger = setup_logger("LLM")
+            logger.error(f"LLM 流式调用失败: {e}")
+            raise
+
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield LLMChunk(
+                    delta_content=chunk.choices[0].delta.content,
+                    finish_reason=None,
+                    usage=None,
+                )
+            if chunk.choices and chunk.choices[0].finish_reason:
+                yield LLMChunk(
+                    delta_content="",
+                    finish_reason=chunk.choices[0].finish_reason,
+                    usage=TokenUsage(
+                        prompt_tokens=chunk.usage.prompt_tokens if chunk.usage else 0,
+                        completion_tokens=chunk.usage.completion_tokens if chunk.usage else 0,
+                        total_tokens=chunk.usage.total_tokens if chunk.usage else 0,
+                    ),
+                )
+
+    def get_context_length(self) -> int:
+        return self._context_length
+
+    def count_tokens(self, text: str) -> int:
+        from utils.token_counter import count_tokens
+        return count_tokens(text)
+
+    def get_model_name(self) -> str:
+        return self.model
+
+    def rebuild_client(self) -> None:
+        """重建底层 HTTP 客户端（用于断线重连）"""
+        from utils.logger import setup_logger
+        logger = setup_logger("LLM")
+        logger.info("重建 LLM 客户端")
+        del self._client
+        self._build_client()
+
+
+class VLLMAdapter(OpenAICompatibleAdapter):
+    """本地 vLLM 适配器（Qwen3.6-27B AWQ，8K 上下文）"""
+
+    def __init__(self, config: dict):
+        # vLLM 默认配置
+        default_config = {
+            "base_url": "http://192.168.x.x:8000/v1",
+            "model": "Qwen3.6-27B-AWQ",
+            "api_key": "EMPTY",  # vLLM 默认不需要 API key
+            "context_length": 8192,
+            "timeout": 120,
+        }
+        default_config.update(config)
+        super().__init__(default_config)
+
+
+class DeepSeekAdapter(OpenAICompatibleAdapter):
+    """云端 DeepSeek API 适配器（deepseek-chat，128K 上下文）"""
+
+    def __init__(self, config: dict):
+        import os
+        # DeepSeek 默认配置
+        default_config = {
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-chat",
+            "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
+            "context_length": 131072,
+            "timeout": 120,
+        }
+        default_config.update(config)
+        super().__init__(default_config)
+
+
 def create_llm_adapter(backend: str, config: dict) -> LLMAdapter:
     """LLM 适配器工厂函数
 
@@ -206,8 +346,8 @@ def create_llm_adapter(backend: str, config: dict) -> LLMAdapter:
     """
     adapters = {
         "mock": MockLLMAdapter,
-        "vllm": MockLLMAdapter,  # mock阶段统一用Mock
-        "deepseek": MockLLMAdapter,
+        "vllm": VLLMAdapter,
+        "deepseek": DeepSeekAdapter,
     }
     if backend not in adapters:
         raise ValueError(f"不支持的LLM后端: {backend}")
