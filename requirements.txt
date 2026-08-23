@@ -1,11 +1,37 @@
-# 核心依赖
+# 教学视频内容提取与总结工具 - Python 依赖
+# 验证通过的版本组合（2026.08.23，RTX 3080 Windows 11）
+# 安装顺序请参考 Document/环境文档/开发环境安装文档.md
+
+# === 核心配置 ===
 pyyaml>=6.0
 
-# 可选依赖（mock阶段不需要，真实运行时需要）
-# torch>=2.0
-# paddlepaddle-gpu>=2.6
-# funasr>=1.0
-# paddleocr>=2.7
-# openai>=1.0
-# tiktoken>=0.5
-# pillow>=10.0
+# === PyTorch（FunASR 依赖，GPU 版 cu126）===
+# 必须用 --index-url https://download.pytorch.org/whl/cu126 安装
+torch==2.13.0+cu126
+
+# === PaddlePaddle（PaddleOCR 依赖，Windows 最高版）===
+# 必须用 -f https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html 安装
+paddlepaddle-gpu==2.6.1.post120
+
+# === PaddleOCR（文字识别，固定 2.8.1，3.x 不兼容 Paddle 2.6）===
+paddleocr==2.8.1
+
+# === OpenCV（PaddleOCR 依赖，用 contrib 版，不要装普通版）===
+opencv-contrib-python==4.10.0.84
+
+# === numpy（PaddleOCR 2.8.1 不兼容 2.x，必须 <2.0）===
+numpy==1.26.4
+
+# === stringzilla（PaddleOCR 2.x 依赖，用预编译 wheel 避免 VC++ 编译）===
+# 安装命令：pip install stringzilla --only-binary :all:
+stringzilla==5.1.1
+
+# === FunASR（语音识别）===
+funasr==1.4.2
+modelscope>=1.0
+
+# === OpenAI SDK（DeepSeek / vLLM API 调用）===
+openai>=1.0
+
+# === 图像处理 ===
+pillow>=10.0
