@@ -109,14 +109,24 @@ class ConfigManager:
     def load(self) -> Config:
         """加载配置文件
 
+        加载顺序（后者覆盖前者）：
+        1. config.yaml 默认配置
+        2. .env 文件中的环境变量
+        3. 系统环境变量
+
         Returns:
             Config 对象
 
         Raises:
             ConfigError: 配置文件不存在或格式错误
         """
+        # 1. 加载 .env 文件（在加载 config.yaml 之前，确保环境变量可用）
+        self._load_dotenv()
+
         if not os.path.exists(self.config_path):
             # 配置文件不存在，使用默认配置
+            self._validate()
+            self._load_env_vars()
             return self.config
 
         try:
@@ -129,6 +139,39 @@ class ConfigManager:
         self._validate()
         self._load_env_vars()
         return self.config
+
+    def _load_dotenv(self) -> None:
+        """加载项目根目录下的 .env 文件
+
+        简单的 .env 解析器，不依赖 python-dotenv 库。
+        支持 KEY=VALUE 格式，忽略空行和 # 开头的注释行。
+        """
+        dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+        if not os.path.exists(dotenv_path):
+            return
+
+        try:
+            with open(dotenv_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    # 忽略空行和注释
+                    if not line or line.startswith("#"):
+                        continue
+                    # 解析 KEY=VALUE
+                    if "=" in line:
+                        key, _, value = line.partition("=")
+                        key = key.strip()
+                        value = value.strip()
+                        # 去除引号
+                        if (value.startswith('"') and value.endswith('"')) or \
+                           (value.startswith("'") and value.endswith("'")):
+                            value = value[1:-1]
+                        # 只设置未存在的环境变量（不覆盖已有的系统环境变量）
+                        if key and key not in os.environ:
+                            os.environ[key] = value
+        except Exception:
+            # .env 文件读取失败不影响主流程
+            pass
 
     def _apply_dict(self, data: dict) -> None:
         """将字典数据应用到配置对象"""
@@ -186,10 +229,24 @@ class ConfigManager:
             raise ConfigError("cache.max_cache_size_gb 必须大于 0")
 
     def _load_env_vars(self) -> None:
-        """从环境变量加载敏感信息（API Key）"""
+        """从环境变量加载敏感信息（API Key、vLLM 地址等）
+
+        环境变量优先级高于 config.yaml，确保敏感信息不写入配置文件。
+        """
+        # DeepSeek API Key
         env_api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-        if env_api_key and not self.config.llm.cloud.api_key:
+        if env_api_key:
             self.config.llm.cloud.api_key = env_api_key
+
+        # 本地 vLLM 服务地址（覆盖 config.yaml 中的占位符）
+        env_vllm_url = os.environ.get("VLLM_BASE_URL", "")
+        if env_vllm_url:
+            self.config.llm.local.base_url = env_vllm_url
+
+        # 本地 vLLM 模型名
+        env_vllm_model = os.environ.get("VLLM_MODEL", "")
+        if env_vllm_model:
+            self.config.llm.local.model = env_vllm_model
 
     def get(self) -> Config:
         """获取当前配置"""

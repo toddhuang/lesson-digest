@@ -21,10 +21,15 @@ output/
 # 测试文件
 test_video.mp4
 test_*.mp4
+tests/*.mp4
+tests/*.avi
+tests/*.mkv
+tests/*.mov
 
 # 环境变量与密钥
 .env
 .env.local
+.env.*.local
 *.key
 
 # 日志
