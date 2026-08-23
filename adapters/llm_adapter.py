@@ -228,6 +228,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
                 top_p=top_p,
                 max_tokens=max_tokens,
                 stream=False,
+                extra_body={"thinking": {"type": "disabled"}},  # MVP阶段禁用思考过程，避免token被思考占满
             )
         except Exception as e:
             logger.error(f"LLM 调用失败: {e}")
@@ -236,8 +237,18 @@ class OpenAICompatibleAdapter(LLMAdapter):
         choice = response.choices[0]
         usage = response.usage
 
+        content = choice.message.content or ""
+        reasoning = getattr(choice.message, "reasoning_content", None) or ""
+
+        # DeepSeek 推理模型：content 为空但 reasoning 非空，说明 max_tokens 不够
+        if not content and reasoning:
+            logger.warning(
+                f"LLM 返回 content 为空，但 reasoning_content 非空（{len(reasoning)}字符）。"
+                f"finish_reason={choice.finish_reason}，可能是 max_tokens 不够，思考过程占满了 token。"
+            )
+
         return LLMResponse(
-            content=choice.message.content or "",
+            content=content,
             model=self.model,
             usage=TokenUsage(
                 prompt_tokens=usage.prompt_tokens if usage else 0,
@@ -301,22 +312,6 @@ class OpenAICompatibleAdapter(LLMAdapter):
         self._build_client()
 
 
-class VLLMAdapter(OpenAICompatibleAdapter):
-    """本地 vLLM 适配器（Qwen3.6-27B AWQ，8K 上下文）"""
-
-    def __init__(self, config: dict):
-        # vLLM 默认配置
-        default_config = {
-            "base_url": "http://192.168.x.x:8000/v1",
-            "model": "Qwen3.6-27B-AWQ",
-            "api_key": "EMPTY",  # vLLM 默认不需要 API key
-            "context_length": 8192,
-            "timeout": 120,
-        }
-        default_config.update(config)
-        super().__init__(default_config)
-
-
 class DeepSeekAdapter(OpenAICompatibleAdapter):
     """云端 DeepSeek API 适配器（deepseek-chat，128K 上下文）"""
 
@@ -334,11 +329,169 @@ class DeepSeekAdapter(OpenAICompatibleAdapter):
         super().__init__(default_config)
 
 
+class VolcengineAdapter(OpenAICompatibleAdapter):
+    """火山引擎豆包 API 适配器（OpenAI 兼容，中文教育场景优化）
+
+    支持模型：doubao-seed-2.0-pro / doubao-1.5-pro / doubao-1.5-lite 等
+    API 地址：https://ark.cn-beijing.volces.com/api/v3
+    """
+
+    def __init__(self, config: dict):
+        import os
+        # 火山引擎默认配置
+        default_config = {
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "model": "doubao-seed-2-1-pro-260628",
+            "api_key": os.environ.get("VOLCENGINE_API_KEY", ""),
+            "context_length": 131072,
+            "timeout": 120,
+        }
+        default_config.update(config)
+        # 调用父类的父类（LLMAdapter）的 __init__，跳过 OpenAICompatibleAdapter 的默认 extra_body
+        # 实际上直接调用 OpenAICompatibleAdapter.__init__ 即可，extra_body 在 chat 方法中处理
+        super(OpenAICompatibleAdapter, self).__init__()
+        self.base_url = default_config["base_url"]
+        self.model = default_config["model"]
+        self.api_key = default_config["api_key"]
+        self._context_length = default_config["context_length"]
+        self._timeout = default_config["timeout"]
+        self._client = None
+        self._build_client()
+
+    def _convert_messages_to_responses_input(self, messages: list) -> list:
+        """将传统 chat.completions 的 messages 格式转换为 responses.create 的 input 格式
+
+        responses.create 的 input 格式：
+        [
+            {"role": "system", "content": [{"type": "input_text", "text": "..."}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "..."}]},
+        ]
+        """
+        input_list = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                input_list.append({
+                    "role": role,
+                    "content": [{"type": "input_text", "text": content}],
+                })
+            elif isinstance(content, list):
+                # 已经是多模态格式，直接转换
+                converted_content = []
+                for item in content:
+                    if item.get("type") == "text":
+                        converted_content.append({"type": "input_text", "text": item.get("text", "")})
+                    elif item.get("type") == "image_url":
+                        converted_content.append({"type": "input_image", "image_url": item.get("image_url", "")})
+                    else:
+                        converted_content.append(item)
+                input_list.append({"role": role, "content": converted_content})
+        return input_list
+
+    def _extract_responses_output(self, response) -> str:
+        """从 responses.create 响应中提取输出文本
+
+        兼容多种返回格式：
+        - response.output_text
+        - response.output[0].content[0].text
+        - response.output[*].content[*].text
+        """
+        # 方式1：直接有 output_text 属性
+        output_text = getattr(response, "output_text", None)
+        if output_text:
+            return output_text
+
+        # 方式2：从 output 数组中提取
+        output = getattr(response, "output", None)
+        if output and isinstance(output, list):
+            texts = []
+            for item in output:
+                content = getattr(item, "content", None)
+                if content and isinstance(content, list):
+                    for c in content:
+                        text = getattr(c, "text", None)
+                        if text:
+                            texts.append(text)
+            if texts:
+                return "".join(texts)
+
+        # 方式3：尝试字典格式
+        if isinstance(response, dict):
+            if "output_text" in response:
+                return response["output_text"]
+            if "output" in response and isinstance(response["output"], list):
+                texts = []
+                for item in response["output"]:
+                    if "content" in item and isinstance(item["content"], list):
+                        for c in item["content"]:
+                            if "text" in c:
+                                texts.append(c["text"])
+                if texts:
+                    return "".join(texts)
+
+        return ""
+
+    def chat(self, messages, temperature=0.3, top_p=0.9, max_tokens=2000, **kwargs) -> LLMResponse:
+        """非流式对话（使用 responses.create 接口，seed 系列新模型专用）
+
+        注意：seed 系列模型默认开启深度思考，会消耗大量 output token。
+        通过 reasoning={"effort": "none"} 禁用思考过程，直接输出答案。
+        """
+        from utils.logger import setup_logger
+        logger = setup_logger("LLM")
+
+        # 转换消息格式
+        responses_input = self._convert_messages_to_responses_input(messages)
+
+        try:
+            response = self._client.responses.create(
+                model=self.model,
+                input=responses_input,
+                max_output_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                reasoning={"effort": "none"},  # 禁用深度思考，直接输出
+            )
+        except Exception as e:
+            logger.error(f"火山引擎豆包 LLM 调用失败 (responses.create): {e}")
+            raise
+
+        # 提取输出文本（禁用思考后 output_text 直接有值）
+        content = getattr(response, "output_text", "")
+        if not content:
+            content = self._extract_responses_output(response)
+
+        # 提取 token 使用情况
+        usage = getattr(response, "usage", None)
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+        if usage:
+            prompt_tokens = getattr(usage, "input_tokens", getattr(usage, "prompt_tokens", 0))
+            completion_tokens = getattr(usage, "output_tokens", getattr(usage, "completion_tokens", 0))
+            total_tokens = getattr(usage, "total_tokens", prompt_tokens + completion_tokens)
+
+        if not content:
+            logger.warning(f"火山引擎豆包返回空内容，status={getattr(response, 'status', 'unknown')}")
+
+        return LLMResponse(
+            content=content,
+            model=self.model,
+            usage=TokenUsage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            ),
+            finish_reason="stop",
+        )
+
+
 def create_llm_adapter(backend: str, config: dict) -> LLMAdapter:
     """LLM 适配器工厂函数
 
     Args:
-        backend: 后端类型（"vllm"/"deepseek"/"mock"）
+        backend: 后端类型（"deepseek"/"volcengine"/"mock"）
         config: 后端配置
 
     Returns:
@@ -346,9 +499,9 @@ def create_llm_adapter(backend: str, config: dict) -> LLMAdapter:
     """
     adapters = {
         "mock": MockLLMAdapter,
-        "vllm": VLLMAdapter,
         "deepseek": DeepSeekAdapter,
+        "volcengine": VolcengineAdapter,
     }
     if backend not in adapters:
-        raise ValueError(f"不支持的LLM后端: {backend}")
+        raise ValueError(f"不支持的LLM后端: {backend}，支持: {list(adapters.keys())}")
     return adapters[backend](config)

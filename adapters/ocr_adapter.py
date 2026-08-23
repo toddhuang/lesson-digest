@@ -111,7 +111,6 @@ class PaddleOCRAdapter(OCRAdapter):
             use_angle_cls=use_angle_cls,
             lang=language,
             use_gpu=True,
-            show_log=False,
         )
         logger.info("PaddleOCR 模型加载完成")
 

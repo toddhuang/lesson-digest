@@ -1,6 +1,6 @@
 """
 M11 LLM 客户端模块
-LLM 调用业务逻辑（双后端管理、重试、缓存、健康检查、断线重连），通过适配层调用具体LLM服务。
+LLM 调用业务逻辑（多服务商管理、重试、缓存、健康检查、断线重连），通过适配层调用具体LLM服务。
 对应文档：03_接口设计/M11_LLM客户端模块接口.md
 """
 
@@ -24,36 +24,59 @@ logger = setup_logger("M11_llm")
 
 
 class LLMClient:
-    """LLM 客户端"""
+    """LLM 客户端（支持多服务商：deepseek / volcengine 等）"""
 
     def __init__(self, config: LLMConfig, cache_dir: str = "./cache/llm"):
         self.config = config
         self.cache_dir = cache_dir
-        self._local_adapter: Optional[LLMAdapter] = None
-        self._cloud_adapter: Optional[LLMAdapter] = None
-        self._health_status = {"local": None, "cloud": None}
-        self._last_health_check = {"local": 0, "cloud": 0}
+        self._adapters: dict = {}  # key: 服务商名, value: LLMAdapter 实例
+        self._health_status = {}
+        self._last_health_check = {}
+
+    def _resolve_backend(self, backend: str) -> str:
+        """解析后端别名
+
+        - "cloud" -> config.default_provider（向后兼容）
+        - 其他 -> 直接作为服务商名（deepseek/volcengine 等）
+        """
+        if backend == "cloud":
+            return self.config.default_provider
+        return backend
 
     def _get_adapter(self, backend: str) -> LLMAdapter:
-        if backend == "local":
-            if self._local_adapter is None:
-                self._local_adapter = create_llm_adapter("vllm", {
-                    "base_url": self.config.local.base_url,
-                    "model": self.config.local.model,
-                    "context_length": self.config.local.context_length,
-                })
-            return self._local_adapter
-        elif backend == "cloud":
-            if self._cloud_adapter is None:
-                self._cloud_adapter = create_llm_adapter("deepseek", {
-                    "base_url": self.config.cloud.base_url,
-                    "model": self.config.cloud.model,
-                    "context_length": self.config.cloud.context_length,
-                    "api_key": self.config.cloud.api_key,
-                })
-            return self._cloud_adapter
-        else:
-            raise InvalidBackendError(f"无效的后端: {backend}，必须是 'local' 或 'cloud'")
+        """获取指定服务商的适配器实例（懒加载+缓存）
+
+        Args:
+            backend: 服务商名（deepseek/volcengine/mock）或别名（cloud）
+
+        Returns:
+            LLMAdapter 实例
+        """
+        provider_name = self._resolve_backend(backend)
+
+        if provider_name in self._adapters:
+            return self._adapters[provider_name]
+
+        # 从配置中读取服务商配置
+        provider_config = self.config.providers.get(provider_name)
+        if provider_config is None:
+            raise InvalidBackendError(
+                f"未配置的LLM服务商: {provider_name}，"
+                f"已配置: {list(self.config.providers.keys())}"
+            )
+
+        # 构建适配器配置
+        adapter_config = {
+            "base_url": provider_config.base_url,
+            "model": provider_config.model,
+            "context_length": provider_config.context_length,
+            "api_key": provider_config.api_key,
+        }
+
+        adapter = create_llm_adapter(provider_name, adapter_config)
+        self._adapters[provider_name] = adapter
+        logger.info(f"[M11] 创建LLM适配器: {provider_name} (model={provider_config.model})")
+        return adapter
 
     def _count_messages_tokens(self, messages: List[dict]) -> int:
         """统计消息列表的总 token 数"""
@@ -75,7 +98,7 @@ class LLMClient:
 
         Args:
             messages: 对话消息列表
-            backend: 后端选择（"local"/"cloud"）
+            backend: 服务商名（deepseek/volcengine）或别名（cloud）
             temperature: 温度参数
             top_p: top_p参数
             max_tokens: 最大生成token数
@@ -84,11 +107,8 @@ class LLMClient:
         Returns:
             LLMResponse 对象
         """
-        # 1. 校验 backend
-        if backend not in ("local", "cloud"):
-            raise InvalidBackendError(f"无效的后端: {backend}")
-
-        adapter = self._get_adapter(backend)
+        provider_name = self._resolve_backend(backend)
+        adapter = self._get_adapter(provider_name)
 
         # 2. Token 超限检测
         input_tokens = self._count_messages_tokens(messages)
@@ -100,23 +120,22 @@ class LLMClient:
 
         # 3. 缓存检查
         if use_cache:
-            cache_key = self._get_cache_key(messages, backend, temperature, top_p, max_tokens)
+            cache_key = self._get_cache_key(messages, provider_name, temperature, top_p, max_tokens)
             cache_path = os.path.join(self.cache_dir, f"{cache_key}.json")
             if os.path.exists(cache_path):
                 logger.info(f"[M11] 命中LLM缓存: {cache_key[:8]}")
                 data = load_json(cache_path)
                 return LLMResponse(**data)
 
-        # 4. 健康检查（mock阶段跳过，直接认为健康）
-        # 5. 带重试调用
+        # 4. 带重试调用
         response = self._call_with_retry(adapter, messages, temperature, top_p, max_tokens)
 
-        # 6. 写入缓存
+        # 5. 写入缓存
         if use_cache:
             ensure_dir(self.cache_dir)
             save_json(response.__dict__, cache_path)
 
-        logger.info(f"[M11] LLM调用完成: {backend}, {response.usage.total_tokens} tokens")
+        logger.info(f"[M11] LLM调用完成: {provider_name}, {response.usage.total_tokens} tokens")
         return response
 
     def _call_with_retry(self, adapter, messages, temperature, top_p, max_tokens) -> LLMResponse:
@@ -142,29 +161,43 @@ class LLMClient:
         max_tokens: int = 2000
     ) -> Iterator[LLMChunk]:
         """流式对话"""
-        if backend not in ("local", "cloud"):
-            raise InvalidBackendError(f"无效的后端: {backend}")
-        adapter = self._get_adapter(backend)
+        provider_name = self._resolve_backend(backend)
+        adapter = self._get_adapter(provider_name)
         return adapter.chat_stream(messages, temperature=temperature, top_p=top_p, max_tokens=max_tokens)
 
     def health_check(self, backend: str) -> bool:
-        """健康检查（mock版直接返回True）"""
-        return True
+        """健康检查"""
+        provider_name = self._resolve_backend(backend)
+        try:
+            adapter = self._get_adapter(provider_name)
+            # 简单的健康检查：发送一个极短的请求
+            adapter.chat(
+                [{"role": "user", "content": "hi"}],
+                max_tokens=1,
+                temperature=0,
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"[M11] 健康检查失败 ({provider_name}): {e}")
+            return False
 
     def reconnect(self, backend: str) -> bool:
-        """断线重连（mock版直接返回True）"""
-        adapter = self._get_adapter(backend)
+        """断线重连"""
+        provider_name = self._resolve_backend(backend)
+        adapter = self._get_adapter(provider_name)
         adapter.rebuild_client()
         return True
 
-    def count_tokens(self, text: str, backend: str = "local") -> int:
+    def count_tokens(self, text: str, backend: str = "cloud") -> int:
         """统计文本的 token 数"""
-        adapter = self._get_adapter(backend)
+        provider_name = self._resolve_backend(backend)
+        adapter = self._get_adapter(provider_name)
         return adapter.count_tokens(text)
 
     def get_context_length(self, backend: str) -> int:
-        """获取指定后端的上下文长度"""
-        adapter = self._get_adapter(backend)
+        """获取指定服务商的上下文长度"""
+        provider_name = self._resolve_backend(backend)
+        adapter = self._get_adapter(provider_name)
         return adapter.get_context_length()
 
     def _get_cache_key(self, messages, backend, temperature, top_p, max_tokens) -> str:

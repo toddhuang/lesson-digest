@@ -19,8 +19,9 @@ logger = setup_logger("M12_output")
 class OutputAssembler:
     """输出组装器"""
 
-    def __init__(self, config: OutputConfig):
+    def __init__(self, config: OutputConfig, llm_client=None):
         self.config = config
+        self.llm_client = llm_client
 
     def assemble(self, result: ProcessResult, output_dir: str) -> OutputFiles:
         """将所有处理结果组装为输出文件
@@ -46,9 +47,20 @@ class OutputAssembler:
 
         output_files = OutputFiles(output_dir=video_output_dir)
 
-        # 1. 逐字稿
+        # 1. 逐字稿（豆包纠错后直接输出，不保留原始未纠错版本）
         transcript_path = os.path.join(video_output_dir, self.config.transcript_filename)
-        self._write_transcript(result, transcript_path)
+        if self.llm_client and result.asr_results:
+            from utils.asr_corrector import ASRCorrector
+            corrector = ASRCorrector(self.llm_client)
+            try:
+                corrected = corrector.correct(result.asr_results, backend="volcengine")
+                self._write_transcript_with_sentences(corrected, transcript_path, result, "豆包纠错")
+                logger.info(f"[M12] 豆包纠错逐字稿: {transcript_path}")
+            except Exception as e:
+                logger.error(f"[M12] 豆包纠错失败，使用原始逐字稿: {e}")
+                self._write_transcript(result, transcript_path)
+        else:
+            self._write_transcript(result, transcript_path)
         output_files.transcript_path = transcript_path
 
         # 2. 知识点清单
@@ -69,19 +81,30 @@ class OutputAssembler:
         return output_files
 
     def _write_transcript(self, result: ProcessResult, output_path: str) -> None:
-        """写逐字稿"""
-        lines = ["# 逐字稿\n"]
+        """写逐字稿（原始未纠错）"""
+        self._write_transcript_with_sentences(result.asr_results, output_path, result, "原始未纠错")
+
+    def _write_transcript_with_sentences(self, sentences, output_path: str,
+                                           result: ProcessResult, title_suffix: str = "") -> None:
+        """写逐字稿（指定句子列表）
+
+        Args:
+            sentences: 句子列表
+            output_path: 输出路径
+            result: 处理结果（用于视频信息）
+            title_suffix: 标题后缀（如"DeepSeek云端纠错"）
+        """
+        lines = [f"# 逐字稿（{title_suffix}）\n"]
         lines.append(f"> 视频：{os.path.basename(result.video_path)}")
         if result.video_info:
             lines.append(f"> 时长：{format_timestamp(result.video_info.duration, 'hh:mm:ss')}")
         lines.append("")
 
-        for sent in result.asr_results:
+        for sent in sentences:
             ts = format_timestamp(sent.start_time, self.config.timestamp_format)
             lines.append(f"[{ts}] {sent.text}")
 
         save_text("\n".join(lines), output_path)
-        logger.info(f"[M12] 逐字稿: {output_path}")
 
     def _write_knowledge_list(self, result: ProcessResult, output_path: str) -> None:
         """写知识点清单"""

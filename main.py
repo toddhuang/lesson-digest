@@ -11,6 +11,50 @@ import os
 # 将项目根目录加入 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+
+def _setup_windows_gpu_path():
+    """Windows 平台：设置 CUDA/cuDNN DLL 搜索路径，解决 PyTorch 与 PaddlePaddle 共存冲突。
+
+    PATH 顺序（优先级从高到低）：
+    1. torch\lib — PyTorch 自带的 CUDA 库，优先加载，避免与系统 CUDA Toolkit 冲突
+    2. cuDNN bin — cuDNN 8.9.x（PaddlePaddle 需要）
+    3. CUDA Toolkit bin — cublas 等（PaddlePaddle 需要）
+
+    仅在 Windows 平台生效，Linux/macOS 不处理。
+    """
+    if sys.platform != "win32":
+        return
+
+    prepend_dirs = []
+
+    # 1. torch\lib（从当前 venv 推断）
+    torch_lib = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "venv", "Lib", "site-packages", "torch", "lib"
+    )
+    if os.path.isdir(torch_lib):
+        prepend_dirs.append(torch_lib)
+
+    # 2. cuDNN bin（支持环境变量 CUDNN_PATH 覆盖，默认 C:\tools\cudnn\bin）
+    cudnn_bin = os.environ.get("CUDNN_PATH", r"C:\tools\cudnn\bin")
+    if os.path.isdir(cudnn_bin):
+        prepend_dirs.append(cudnn_bin)
+
+    # 3. CUDA Toolkit bin（支持环境变量 CUDA_PATH 覆盖，默认 v12.0）
+    cuda_bin = os.environ.get(
+        "CUDA_PATH",
+        r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.0\bin"
+    )
+    if os.path.isdir(cuda_bin):
+        prepend_dirs.append(cuda_bin)
+
+    if prepend_dirs:
+        os.environ["PATH"] = os.pathsep.join(prepend_dirs) + os.pathsep + os.environ.get("PATH", "")
+
+
+# 必须在 import torch / paddle 之前调用
+_setup_windows_gpu_path()
+
 from config import load_config
 from core.pipeline import Pipeline
 from utils.logger import setup_logger
