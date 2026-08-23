@@ -82,7 +82,7 @@ class Pipeline:
         self.problem_extractor = ProblemExtractor(self.llm_client)
         self.screenshot_capture = ScreenshotCapture(self.frame_extractor)
         self.mindmap_generator = MindmapGenerator(self.llm_client)
-        self.output_assembler = OutputAssembler(config.output)
+        self.output_assembler = OutputAssembler(config.output, self.llm_client)
 
     def run(self, video_path: str, output_dir: str, force: bool = False) -> ProcessResult:
         """执行完整的视频处理流水线
@@ -230,8 +230,8 @@ class Pipeline:
         )
 
     def _stage_merge_text(self, context: PipelineContext):
-        """文本合并"""
-        context.full_text = self.text_merger.merge(context.asr_results, context.ocr_results)
+        """ASR文本整理（只处理ASR，OCR不混入全文本）"""
+        context.full_text = self.text_merger.merge(context.asr_results)
 
     def _stage_extract_knowledge(self, context: PipelineContext, force: bool):
         """知识点提取"""
@@ -242,7 +242,8 @@ class Pipeline:
     def _stage_extract_problems(self, context: PipelineContext, force: bool):
         """题目提取"""
         context.problems = self.problem_extractor.extract(
-            context.full_text, context.video_info.duration, use_cache=not force
+            context.full_text, context.video_info.duration, use_cache=not force,
+            ocr_results=context.ocr_results
         )
 
     def _stage_capture_screenshots(self, context: PipelineContext):

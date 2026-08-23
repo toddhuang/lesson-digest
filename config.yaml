@@ -6,15 +6,18 @@ video:
   frame_quality: 90            # JPG质量（1-100）
 
 llm:
-  local:
-    base_url: "http://192.168.x.x:8000/v1"
-    model: "qwen3.6-27b-awq"
-    context_length: 8192
-  cloud:
-    base_url: "https://api.deepseek.com"
-    model: "deepseek-chat"
-    context_length: 131072
-    api_key: ""                 # 从环境变量 DEEPSEEK_API_KEY 读取
+  default_provider: volcengine  # 默认 LLM 服务商（volcengine=豆包, deepseek=DeepSeek）
+  providers:
+    deepseek:
+      base_url: "https://api.deepseek.com"
+      model: "deepseek-v4-flash"
+      context_length: 131072
+      # api_key 从环境变量 DEEPSEEK_API_KEY 读取，不写在此处
+    volcengine:
+      base_url: "https://ark.cn-beijing.volces.com/api/v3"
+      model: "doubao-seed-2-1-pro-260628"
+      context_length: 131072
+      # api_key 从环境变量 VOLCENGINE_API_KEY 读取，不写在此处
   max_retries: 5
   health_check_interval: 30    # 健康检查间隔（秒）
 
@@ -28,6 +31,8 @@ ocr:
   adapter_type: paddleocr      # OCR适配器类型（paddleocr/easyocr/mock）
   language: "ch"
   use_angle_cls: true
+  enable_color_filter: true     # 启用颜色过滤（去除老师彩色手写，只保留黑色印刷体题目）
+  black_threshold: 80           # 黑色阈值（0-255），通道值低于此值认为是黑色
 
 output:
   transcript_filename: "01_逐字稿.md"

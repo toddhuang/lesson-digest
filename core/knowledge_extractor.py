@@ -1,6 +1,7 @@
 """
 M7 知识点提取模块
 基于全文本，识别视频中的知识点并标注时间戳。
+纯云端方案：直接调用默认 LLM 服务商（DeepSeek/豆包），128K 上下文无需分段。
 对应文档：03_接口设计/M7_知识点提取模块接口.md
 """
 
@@ -12,6 +13,7 @@ from utils.models import KnowledgePoint
 from utils.timestamp import parse_timestamp
 from utils.logger import setup_logger
 from utils.exceptions import LLMResponseParseError, EmptyResultError
+from utils.token_counter import count_tokens
 from core.llm_client import LLMClient
 
 logger = setup_logger("M7_knowledge")
@@ -26,15 +28,15 @@ SYSTEM_PROMPT = """你是一个教学视频内容分析助手。请从以下带�
 4. 不标注重点、难点、考点
 5. 不遗漏任何知识点
 6. 按时间戳顺序输出
-7. 输出 JSON 格式
+7. 输出 JSON 格式，必须紧凑（无缩进、无换行、无Markdown代码块），直接输出JSON数组
 
 【输出格式】
-[{"index": 1, "name": "知识点名称", "start_time": "05:23", "confidence": 0.9}]
+[{"index":1,"name":"知识点名称","start_time":"05:23","confidence":0.9}]
 """
 
 
 class KnowledgeExtractor:
-    """知识点提取器"""
+    """知识点提取器（纯云端，无需分段）"""
 
     def __init__(self, llm_client: LLMClient):
         self.llm_client = llm_client
@@ -50,9 +52,29 @@ class KnowledgeExtractor:
         Returns:
             KnowledgePoint 列表
         """
-        logger.info(f"[M7] 知识点提取: 全文本{len(full_text)}字符")
+        total_tokens = count_tokens(full_text)
+        logger.info(f"[M7] 知识点提取: 全文本{len(full_text)}字符, 约{total_tokens}token")
 
-        user_prompt = f"【视频时长】{video_duration} 秒\n\n【视频全文本】\n{full_text}"
+        knowledge_points = self._extract_single(full_text, video_duration, use_cache)
+
+        if not knowledge_points:
+            raise EmptyResultError("知识点提取结果为空")
+
+        logger.info(f"[M7] 知识点提取完成: {len(knowledge_points)}个知识点")
+        return knowledge_points
+
+    def _extract_single(self, text: str, video_duration: float, use_cache: bool) -> List[KnowledgePoint]:
+        """单次调用 LLM 提取知识点
+
+        Args:
+            text: 全文本
+            video_duration: 视频总时长
+            use_cache: 是否使用缓存
+
+        Returns:
+            KnowledgePoint 列表
+        """
+        user_prompt = f"【视频时长】{video_duration} 秒\n\n【视频全文本】\n{text}"
 
         response = self.llm_client.chat(
             messages=[
@@ -65,18 +87,10 @@ class KnowledgeExtractor:
             use_cache=use_cache,
         )
 
-        # 解析 JSON
-        knowledge_points = self._parse_response(response.content)
-
-        if not knowledge_points:
-            raise EmptyResultError("知识点提取结果为空")
-
-        logger.info(f"[M7] 知识点提取完成: {len(knowledge_points)}个知识点")
-        return knowledge_points
+        return self._parse_response(response.content)
 
     def _parse_response(self, content: str) -> List[KnowledgePoint]:
         """解析 LLM 返回的 JSON"""
-        # 清理 Markdown 代码块标记
         clean = re.sub(r'```json\s*', '', content)
         clean = re.sub(r'```\s*', '', clean)
         clean = clean.strip()

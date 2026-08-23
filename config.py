@@ -23,24 +23,18 @@ class VideoConfig:
 
 
 @dataclass
-class LocalLLMConfig:
-    base_url: str = "http://192.168.x.x:8000/v1"
-    model: str = "qwen3.6-27b-awq"
-    context_length: int = 8192
-
-
-@dataclass
-class CloudLLMConfig:
-    base_url: str = "https://api.deepseek.com/v1"
-    model: str = "deepseek-chat"
+class LLMProviderConfig:
+    """单个 LLM 服务商配置"""
+    base_url: str = ""
+    model: str = ""
     context_length: int = 131072
     api_key: str = ""
 
 
 @dataclass
 class LLMConfig:
-    local: LocalLLMConfig = field(default_factory=LocalLLMConfig)
-    cloud: CloudLLMConfig = field(default_factory=CloudLLMConfig)
+    default_provider: str = "deepseek"
+    providers: dict = field(default_factory=dict)  # key: provider名, value: LLMProviderConfig
     max_retries: int = 5
     health_check_interval: int = 30
 
@@ -182,14 +176,18 @@ class ConfigManager:
 
         if "llm" in data:
             llm_data = data["llm"]
-            if "local" in llm_data:
-                for k, v in llm_data["local"].items():
-                    if hasattr(self.config.llm.local, k):
-                        setattr(self.config.llm.local, k, v)
-            if "cloud" in llm_data:
-                for k, v in llm_data["cloud"].items():
-                    if hasattr(self.config.llm.cloud, k):
-                        setattr(self.config.llm.cloud, k, v)
+            # default_provider
+            if "default_provider" in llm_data:
+                self.config.llm.default_provider = llm_data["default_provider"]
+            # providers
+            if "providers" in llm_data and isinstance(llm_data["providers"], dict):
+                for provider_name, provider_data in llm_data["providers"].items():
+                    if isinstance(provider_data, dict):
+                        provider_config = LLMProviderConfig()
+                        for k, v in provider_data.items():
+                            if hasattr(provider_config, k):
+                                setattr(provider_config, k, v)
+                        self.config.llm.providers[provider_name] = provider_config
             for k in ("max_retries", "health_check_interval"):
                 if k in llm_data:
                     setattr(self.config.llm, k, llm_data[k])
@@ -232,31 +230,33 @@ class ConfigManager:
         """从环境变量加载敏感信息（API Key、模型名、服务地址等）
 
         环境变量优先级高于 config.yaml，确保敏感信息不写入配置文件。
+        支持的服务商：deepseek、volcengine（可扩展）
         """
-        # DeepSeek API Key
-        env_api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-        if env_api_key:
-            self.config.llm.cloud.api_key = env_api_key
+        # 服务商环境变量映射表
+        # 格式：{ 服务商名: { 配置字段: 环境变量名 } }
+        provider_env_map = {
+            "deepseek": {
+                "api_key": "DEEPSEEK_API_KEY",
+                "model": "DEEPSEEK_MODEL",
+                "base_url": "DEEPSEEK_BASE_URL",
+            },
+            "volcengine": {
+                "api_key": "VOLCENGINE_API_KEY",
+                "model": "VOLCENGINE_MODEL",
+                "base_url": "VOLCENGINE_BASE_URL",
+            },
+        }
 
-        # DeepSeek 模型名（不同模型价格不同，按需配置）
-        env_deepseek_model = os.environ.get("DEEPSEEK_MODEL", "")
-        if env_deepseek_model:
-            self.config.llm.cloud.model = env_deepseek_model
+        for provider_name, env_map in provider_env_map.items():
+            # 确保服务商配置存在
+            if provider_name not in self.config.llm.providers:
+                self.config.llm.providers[provider_name] = LLMProviderConfig()
+            provider_config = self.config.llm.providers[provider_name]
 
-        # DeepSeek API 地址（一般不需要改）
-        env_deepseek_url = os.environ.get("DEEPSEEK_BASE_URL", "")
-        if env_deepseek_url:
-            self.config.llm.cloud.base_url = env_deepseek_url
-
-        # 本地 vLLM 服务地址（覆盖 config.yaml 中的占位符）
-        env_vllm_url = os.environ.get("VLLM_BASE_URL", "")
-        if env_vllm_url:
-            self.config.llm.local.base_url = env_vllm_url
-
-        # 本地 vLLM 模型名
-        env_vllm_model = os.environ.get("VLLM_MODEL", "")
-        if env_vllm_model:
-            self.config.llm.local.model = env_vllm_model
+            for field_name, env_var_name in env_map.items():
+                env_value = os.environ.get(env_var_name, "")
+                if env_value:
+                    setattr(provider_config, field_name, env_value)
 
     def get(self) -> Config:
         """获取当前配置"""

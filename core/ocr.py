@@ -1,6 +1,7 @@
 """
 M5 文字识别模块
 文字识别业务逻辑（帧去重、缓存、时间戳管理），通过适配层调用具体OCR引擎。
+支持颜色过滤预处理：去除老师彩色手写，只保留黑色印刷体题目。
 对应文档：03_接口设计/M5_文字识别模块接口.md
 """
 
@@ -23,11 +24,41 @@ class OCRRecognizer:
         self.config = config or {}
         self.cache_dir = cache_dir
         self._adapter: OCRAdapter = None
+        # 颜色过滤配置
+        ocr_config = self.config.get("ocr", {}) if isinstance(self.config, dict) else {}
+        self.enable_color_filter = ocr_config.get("enable_color_filter", True)
+        self.black_threshold = ocr_config.get("black_threshold", 80)
+        self.processed_dir = os.path.join(cache_dir, "processed")
 
     def _get_adapter(self) -> OCRAdapter:
         if self._adapter is None:
             self._adapter = create_ocr_adapter(self.adapter_type, self.config)
         return self._adapter
+
+    def _preprocess_frame(self, frame_path: str) -> str:
+        """对视频帧进行预处理（颜色过滤）
+
+        Args:
+            frame_path: 原始帧路径
+
+        Returns:
+            处理后的帧路径（如果未启用过滤则返回原路径）
+        """
+        if not self.enable_color_filter:
+            return frame_path
+
+        try:
+            from utils.image_preprocess import preprocess_frame_for_ocr
+            ensure_dir(self.processed_dir)
+            processed_path = preprocess_frame_for_ocr(
+                frame_path,
+                output_dir=self.processed_dir,
+                black_threshold=self.black_threshold,
+            )
+            return processed_path
+        except Exception as e:
+            logger.warning(f"[M5] 颜色过滤预处理失败，使用原图: {e}")
+            return frame_path
 
     def recognize_frames(self, frame_paths: List[str], frame_timestamps: List[float],
                          use_cache: bool = True) -> List[OCRFrameResult]:
@@ -41,7 +72,7 @@ class OCRRecognizer:
         Returns:
             OCRFrameResult 列表
         """
-        logger.info(f"[M5] 文字识别: {len(frame_paths)}帧")
+        logger.info(f"[M5] 文字识别: {len(frame_paths)}帧, 颜色过滤={'开' if self.enable_color_filter else '关'}")
 
         results = []
         adapter = self._get_adapter()
@@ -61,8 +92,11 @@ class OCRRecognizer:
                     is_duplicate=data.get("is_duplicate", False),
                 )
             else:
+                # 颜色过滤预处理
+                ocr_frame_path = self._preprocess_frame(frame_path)
+
                 # 调用适配层
-                ocr_results = adapter.recognize(frame_path)
+                ocr_results = adapter.recognize(ocr_frame_path)
                 full_text = "\n".join(r.text for r in ocr_results)
 
                 # 简单去重：与前一帧full_text比较
