@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# 运行时产物
+cache/
+temp/
+output/
+
+# 环境变量与密钥
+.env
+.env.local
+*.key
+
+# 日志
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 模型文件（大文件，不入库）
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.onnx
+models/
