@@ -189,7 +189,7 @@ class ConfigManager:
                             if hasattr(provider_config, k):
                                 setattr(provider_config, k, v)
                         self.config.llm.providers[provider_name] = provider_config
-            for k in ("max_retries", "health_check_interval"):
+            for k in ("max_retries",):
                 if k in llm_data:
                     setattr(self.config.llm, k, llm_data[k])
 

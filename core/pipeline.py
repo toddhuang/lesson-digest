@@ -183,6 +183,8 @@ class Pipeline:
                 self._stage_asr(context, force)
             elif stage == "ocr":
                 self._stage_ocr(context, force)
+            elif stage == "correct_asr":
+                self._stage_correct_asr(context, force)
             elif stage == "merge_text":
                 self._stage_merge_text(context)
             elif stage == "extract_knowledge":

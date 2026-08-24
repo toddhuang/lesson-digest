@@ -77,15 +77,6 @@ class OCRFrameResult:
     is_duplicate: bool = False
 
 
-@dataclass
-class MergedText:
-    """合并后的文本片段，由 M6 文本合并模块返回"""
-    timestamp: float = 0.0
-    text: str = ""
-    source: str = "asr"  # "asr" / "ocr"
-    confidence: float = 1.0
-
-
 # === 三、提取结果相关 ===
 
 @dataclass
