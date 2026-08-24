@@ -94,7 +94,9 @@ def main():
         print(f"知识点: {len(result.knowledge_points)} 个")
         print(f"题目: {len(result.problems)} 道")
         print(f"截图: {len([p for p in result.screenshot_paths if p])} 张")
-        print(f"输出目录: {result.video_path and os.path.join(args.output, os.path.splitext(os.path.basename(result.video_path))[0])}")
+        video_name = os.path.splitext(os.path.basename(result.video_path))[0]
+        output_dir = os.path.join(args.output, video_name)
+        print(f"输出目录: {output_dir}")
         print("=" * 60)
 
     except Exception as e:

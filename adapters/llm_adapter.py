@@ -347,16 +347,8 @@ class VolcengineAdapter(OpenAICompatibleAdapter):
             "timeout": 120,
         }
         default_config.update(config)
-        # 调用父类的父类（LLMAdapter）的 __init__，跳过 OpenAICompatibleAdapter 的默认 extra_body
-        # 实际上直接调用 OpenAICompatibleAdapter.__init__ 即可，extra_body 在 chat 方法中处理
-        super(OpenAICompatibleAdapter, self).__init__()
-        self.base_url = default_config["base_url"]
-        self.model = default_config["model"]
-        self.api_key = default_config["api_key"]
-        self._context_length = default_config["context_length"]
-        self._timeout = default_config["timeout"]
-        self._client = None
-        self._build_client()
+        # 直接调用父类 OpenAICompatibleAdapter.__init__，统一处理属性设置和客户端构建
+        super().__init__(default_config)
 
     def _convert_messages_to_responses_input(self, messages: list) -> list:
         """将传统 chat.completions 的 messages 格式转换为 responses.create 的 input 格式

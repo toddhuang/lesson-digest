@@ -79,10 +79,23 @@ class LLMClient:
         return adapter
 
     def _count_messages_tokens(self, messages: List[dict]) -> int:
-        """统计消息列表的总 token 数"""
+        """统计消息列表的总 token 数（改进估算：中文约1.5字符/token，英文约4字符/token）"""
         total = 0
         for msg in messages:
-            total += len(msg.get("content", "")) // 2  # 简单估算
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # 多模态内容，只统计文本部分
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        content = item.get("text", "")
+                        break
+                else:
+                    continue
+            # 统计中文字符和非中文字符
+            chinese_chars = sum(1 for c in content if '\u4e00' <= c <= '\u9fff')
+            other_chars = len(content) - chinese_chars
+            # 中文约1.5字符/token，英文/数字约4字符/token
+            total += int(chinese_chars / 1.5) + int(other_chars / 4)
         return total
 
     def chat(

@@ -10,7 +10,7 @@ llm:
   providers:
     deepseek:
       base_url: "https://api.deepseek.com"
-      model: "deepseek-v4-flash"
+      model: "deepseek-chat"
       context_length: 131072
       # api_key 从环境变量 DEEPSEEK_API_KEY 读取，不写在此处
     volcengine:
@@ -19,7 +19,6 @@ llm:
       context_length: 131072
       # api_key 从环境变量 VOLCENGINE_API_KEY 读取，不写在此处
   max_retries: 5
-  health_check_interval: 30    # 健康检查间隔（秒）
 
 asr:
   adapter_type: funasr         # ASR适配器类型（funasr/whisper/mock）
@@ -32,7 +31,7 @@ ocr:
   language: "ch"
   use_angle_cls: true
   enable_color_filter: true     # 启用颜色过滤（去除老师彩色手写，只保留黑色印刷体题目）
-  black_threshold: 80           # 黑色阈值（0-255），通道值低于此值认为是黑色
+  black_threshold: 120          # 黑色阈值（0-255），通道值低于此值认为是黑色（保留深灰文字）
 
 output:
   transcript_filename: "01_逐字稿.md"
