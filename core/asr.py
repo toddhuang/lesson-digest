@@ -11,7 +11,7 @@ from typing import List
 from utils.models import Sentence
 from utils.file_utils import ensure_dir, save_json, load_json
 from utils.logger import setup_logger
-from adapters.asr_adapter import create_asr_adapter, ASRAdapter
+from adapters.asr import create_asr_adapter, ASRAdapter
 
 logger = setup_logger("M4_asr")
 

@@ -18,7 +18,7 @@ from utils.exceptions import (
     LLMError, LLMTimeoutError, LLMRateLimitError, LLMConnectionError,
     LLMContextOverflowError, InvalidBackendError
 )
-from adapters.llm_adapter import create_llm_adapter, LLMAdapter
+from adapters.llm import create_llm_adapter, LLMAdapter
 
 logger = setup_logger("M11_llm")
 

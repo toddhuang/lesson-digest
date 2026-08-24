@@ -11,7 +11,7 @@ from typing import List
 from utils.models import OCRFrameResult, OCRResult
 from utils.file_utils import ensure_dir, save_json, load_json
 from utils.logger import setup_logger
-from adapters.ocr_adapter import create_ocr_adapter, OCRAdapter
+from adapters.ocr import create_ocr_adapter, OCRAdapter
 
 logger = setup_logger("M5_ocr")
 
