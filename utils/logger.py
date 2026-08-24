@@ -42,7 +42,7 @@ def setup_logger(name: str = "videocontents", log_dir: str = "./logs", level: in
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
-    except Exception:
+    except (OSError, PermissionError):
         pass  # 文件日志创建失败不影响控制台日志
 
     return logger

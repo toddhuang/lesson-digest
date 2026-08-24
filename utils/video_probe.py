@@ -129,5 +129,5 @@ def has_audio_stream(video_path: str) -> bool:
     try:
         info = probe_video(video_path)
         return info.has_audio
-    except Exception:
+    except (InvalidVideoError, FFmpegError, json.JSONDecodeError, OSError):
         return False

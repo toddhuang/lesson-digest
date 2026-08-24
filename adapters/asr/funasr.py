@@ -146,7 +146,7 @@ class FunASRAdapter(ASRAdapter):
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if result.returncode == 0 and result.stdout.strip():
                 return float(result.stdout.strip())
-        except Exception:
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
             pass
         return 0.0
 

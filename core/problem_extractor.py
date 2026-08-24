@@ -312,7 +312,7 @@ class ProblemExtractor:
                     confidence=item.get("confidence", 0.8),
                 )
                 results.append(problem)
-            except Exception as e:
+            except (KeyError, TypeError, ValueError, AttributeError) as e:
                 logger.warning(f"[M8] 解析题目失败: {e}, item={item}")
 
         return results

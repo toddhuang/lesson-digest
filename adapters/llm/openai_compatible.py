@@ -6,6 +6,10 @@ vLLM 和 DeepSeek 都基于此接口，Volcengine 也继承此类但重写 chat 
 from typing import Iterator
 
 from utils.models import LLMResponse, LLMChunk, TokenUsage
+from utils.exceptions import (
+    LLMTimeoutError, LLMRateLimitError, LLMClientError,
+    LLMConnectionError, LLMServerError, LLMError,
+)
 from adapters.llm.base import LLMAdapter
 
 
@@ -30,6 +34,53 @@ class OpenAICompatibleAdapter(LLMAdapter):
             timeout=self._timeout,
         )
 
+    def _handle_openai_error(self, error: Exception, context: str = "调用") -> None:
+        """分类处理 OpenAI API 异常，转换为项目自定义异常
+
+        Args:
+            error: 捕获的异常
+            context: 上下文描述（如"调用"/"流式调用"），用于日志
+        """
+        from openai import (
+            APIConnectionError, APITimeoutError, RateLimitError,
+            AuthenticationError, BadRequestError, APIStatusError, APIError,
+        )
+        from utils.logger import setup_logger
+        logger = setup_logger("LLM")
+
+        if isinstance(error, APITimeoutError):
+            logger.error(f"LLM {context}超时: {error}")
+            raise LLMTimeoutError(str(error)) from error
+        elif isinstance(error, RateLimitError):
+            retry_after = 0
+            if hasattr(error, "response") and error.response:
+                retry_after = int(error.response.headers.get("retry-after", 0))
+            logger.error(f"LLM {context}速率限制(429), retry_after={retry_after}s: {error}")
+            raise LLMRateLimitError(str(error), retry_after=retry_after) from error
+        elif isinstance(error, AuthenticationError):
+            logger.error(f"LLM {context}认证失败(401): {error}")
+            raise LLMClientError(f"认证失败: {error}") from error
+        elif isinstance(error, BadRequestError):
+            logger.error(f"LLM {context}参数错误(400): {error}")
+            raise LLMClientError(f"参数错误: {error}") from error
+        elif isinstance(error, APIConnectionError):
+            logger.error(f"LLM {context}连接失败: {error}")
+            raise LLMConnectionError(str(error)) from error
+        elif isinstance(error, APIStatusError):
+            status_code = getattr(error, "status_code", 500)
+            if status_code >= 500:
+                logger.error(f"LLM {context}服务端错误({status_code}): {error}")
+                raise LLMServerError(str(error)) from error
+            else:
+                logger.error(f"LLM {context}客户端错误({status_code}): {error}")
+                raise LLMClientError(str(error)) from error
+        elif isinstance(error, APIError):
+            logger.error(f"LLM {context}API错误: {error}")
+            raise LLMError(str(error)) from error
+        else:
+            logger.error(f"LLM {context}未知错误({type(error).__name__}): {error}")
+            raise LLMError(f"未知错误: {error}") from error
+
     def chat(self, messages, temperature=0.3, top_p=0.9, max_tokens=2000, **kwargs) -> LLMResponse:
         """非流式对话"""
         from utils.logger import setup_logger
@@ -46,8 +97,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
                 extra_body={"thinking": {"type": "disabled"}},
             )
         except Exception as e:
-            logger.error(f"LLM 调用失败: {e}")
-            raise
+            self._handle_openai_error(e, context="调用")
 
         choice = response.choices[0]
         usage = response.usage
@@ -84,10 +134,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
                 stream=True,
             )
         except Exception as e:
-            from utils.logger import setup_logger
-            logger = setup_logger("LLM")
-            logger.error(f"LLM 流式调用失败: {e}")
-            raise
+            self._handle_openai_error(e, context="流式调用")
 
         for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:

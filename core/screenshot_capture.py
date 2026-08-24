@@ -11,6 +11,7 @@ from typing import List
 from utils.models import Problem
 from utils.file_utils import ensure_dir
 from utils.logger import setup_logger
+from utils.exceptions import InvalidVideoError, TimestampOutOfRangeError, FFmpegError
 from core.frame_extractor import FrameExtractor
 
 logger = setup_logger("M9_screenshot")
@@ -51,12 +52,12 @@ class ScreenshotCapture:
                     try:
                         from utils.image_preprocess import remove_color_keep_black
                         remove_color_keep_black(output_path, output_path, black_threshold=80)
-                    except Exception as e:
+                    except (FileNotFoundError, OSError, ValueError, ImportError) as e:
                         logger.warning(f"[M9] 题目{problem.index:02d}颜色过滤失败，保留原图: {e}")
 
                 screenshot_paths.append(output_path)
                 logger.info(f"[M9] 题目{problem.index:02d}截图: t={problem.start_time}s -> {output_path}")
-            except Exception as e:
+            except (InvalidVideoError, TimestampOutOfRangeError, FFmpegError, FileNotFoundError, OSError) as e:
                 logger.warning(f"[M9] 题目{problem.index:02d}截图失败: {e}")
                 screenshot_paths.append(None)
 

@@ -66,7 +66,7 @@ class OCRRecognizer:
                 black_threshold=self.black_threshold,
             )
             return processed_path
-        except Exception as e:
+        except (FileNotFoundError, OSError, ValueError, ImportError) as e:
             logger.warning(f"[M5] 颜色过滤预处理失败，使用原图: {e}")
             return frame_path
 

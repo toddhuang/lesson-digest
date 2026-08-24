@@ -164,7 +164,7 @@ class ConfigManager:
                         # 只设置未存在的环境变量（不覆盖已有的系统环境变量）
                         if key and key not in os.environ:
                             os.environ[key] = value
-        except Exception:
+        except (FileNotFoundError, PermissionError, UnicodeDecodeError, OSError):
             # .env 文件读取失败不影响主流程
             pass
 

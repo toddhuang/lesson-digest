@@ -96,7 +96,7 @@ class AudioExtractor:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if result.returncode == 0 and result.stdout.strip():
                 duration = float(result.stdout.strip())
-        except Exception:
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
             # ffprobe 失败时使用文件大小估算（16kHz 16bit 单声道 = 32000 bytes/秒）
             if file_size > 44:  # 减去 WAV 头
                 duration = (file_size - 44) / (self.sample_rate * self.channels * 2)

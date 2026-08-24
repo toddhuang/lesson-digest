@@ -191,8 +191,8 @@ class LLMClient:
                 temperature=0,
             )
             return True
-        except Exception as e:
-            logger.warning(f"[M11] 健康检查失败 ({provider_name}): {e}")
+        except LLMError as e:
+            logger.warning(f"[M11] 健康检查失败 ({provider_name}): {type(e).__name__}: {e}")
             return False
 
     def reconnect(self, backend: str) -> bool:

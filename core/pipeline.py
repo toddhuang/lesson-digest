@@ -6,6 +6,7 @@ M13 主流程编排模块（Pipeline）
 
 import os
 import time
+import traceback
 from typing import Optional
 
 from config import Config
@@ -15,7 +16,7 @@ from utils.models import (
 )
 from utils.file_utils import ensure_dir, get_file_hash
 from utils.logger import setup_logger
-from utils.exceptions import PipelineError, VideoNotFoundError
+from utils.exceptions import PipelineError, VideoNotFoundError, VideoContentError, LLMError
 
 from core.audio_extractor import AudioExtractor
 from core.frame_extractor import FrameExtractor
@@ -155,7 +156,7 @@ class Pipeline:
         except Exception as e:
             self._progress.is_running = False
             self._progress.error = str(e)
-            logger.error(f"[Pipeline] 处理失败: {e}")
+            logger.error(f"[Pipeline] 处理失败: {e}\n{traceback.format_exc()}")
             raise PipelineError(f"流水线执行失败（阶段: {self._progress.current_stage}）: {e}",
                                 stage=self._progress.current_stage, original_error=e)
 
@@ -203,8 +204,8 @@ class Pipeline:
             elapsed = time.time() - start_time
             logger.info(f"[Pipeline] 阶段 {stage} 完成 ({elapsed:.2f}s)")
 
-        except Exception as e:
-            logger.error(f"[Pipeline] 阶段 {stage} 失败: {e}")
+        except VideoContentError as e:
+            logger.error(f"[Pipeline] 阶段 {stage} 失败 ({type(e).__name__}): {e}")
             raise
 
     def _stage_probe(self, context: PipelineContext):
@@ -254,8 +255,8 @@ class Pipeline:
             corrected = corrector.correct(context.asr_results, backend=default_provider)
             context.asr_results = corrected
             logger.info(f"[Pipeline] ASR纠错完成（服务商: {default_provider}）")
-        except Exception as e:
-            logger.error(f"[Pipeline] ASR纠错失败，使用原始逐字稿: {e}")
+        except LLMError as e:
+            logger.error(f"[Pipeline] ASR纠错失败 ({type(e).__name__})，使用原始逐字稿: {e}")
             # 纠错失败不中断流水线，继续使用原始ASR结果
 
     def _stage_merge_text(self, context: PipelineContext):

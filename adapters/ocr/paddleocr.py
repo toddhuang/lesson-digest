@@ -104,7 +104,7 @@ class PaddleOCRAdapter(OCRAdapter):
             from PIL import Image
             with Image.open(image_path) as img:
                 return img.width, img.height
-        except Exception:
+        except (FileNotFoundError, OSError, ImportError):
             try:
                 cmd = ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
                        "-show_entries", "stream=width,height", "-of", "csv=p=0", image_path]
@@ -113,6 +113,6 @@ class PaddleOCRAdapter(OCRAdapter):
                     parts = result.stdout.strip().split(",")
                     if len(parts) >= 2:
                         return int(parts[0]), int(parts[1])
-            except Exception:
+            except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
                 pass
         return 1920, 1080

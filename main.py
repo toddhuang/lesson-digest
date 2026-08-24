@@ -7,6 +7,7 @@
 import argparse
 import sys
 import os
+import traceback
 
 # 将项目根目录加入 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -100,7 +101,7 @@ def main():
         print("=" * 60)
 
     except Exception as e:
-        logger.error(f"处理失败: {e}")
+        logger.error(f"处理失败: {e}\n{traceback.format_exc()}")
         print(f"\n错误: {e}", file=sys.stderr)
         sys.exit(1)
 

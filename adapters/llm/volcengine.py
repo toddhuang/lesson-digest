@@ -118,8 +118,7 @@ class VolcengineAdapter(OpenAICompatibleAdapter):
                 reasoning={"effort": "none"},
             )
         except Exception as e:
-            logger.error(f"火山引擎豆包 LLM 调用失败 (responses.create): {e}")
-            raise
+            self._handle_openai_error(e, context="responses.create调用")
 
         content = getattr(response, "output_text", "")
         if not content:

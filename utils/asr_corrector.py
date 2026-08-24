@@ -10,6 +10,7 @@ from typing import List
 
 from utils.models import Sentence
 from utils.logger import setup_logger
+from utils.exceptions import LLMError
 
 logger = setup_logger("ASR_Corrector")
 
@@ -90,8 +91,8 @@ class ASRCorrector:
                 max_tokens=8000,
             )
             return response.content.strip()
-        except Exception as e:
-            logger.error(f"[ASR纠错] LLM调用失败: {e}，使用原文")
+        except LLMError as e:
+            logger.error(f"[ASR纠错] LLM调用失败 ({type(e).__name__}): {e}，使用原文")
             return text
 
     def _align_lines(self, original: List[Sentence], corrected_lines: List[str]) -> List[Sentence]:

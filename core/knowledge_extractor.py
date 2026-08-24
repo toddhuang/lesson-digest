@@ -110,7 +110,7 @@ class KnowledgeExtractor:
                     confidence=item.get("confidence", 0.8),
                 )
                 results.append(kp)
-            except Exception as e:
+            except (KeyError, TypeError, ValueError, AttributeError) as e:
                 logger.warning(f"[M7] 解析知识点失败: {e}, item={item}")
 
         return results
