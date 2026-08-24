@@ -38,6 +38,7 @@ STAGES = [
     "extract_frames",
     "asr",
     "ocr",
+    "correct_asr",
     "merge_text",
     "extract_knowledge",
     "extract_problems",
@@ -71,6 +72,7 @@ class Pipeline:
         )
         self.ocr_recognizer = OCRRecognizer(
             adapter_type=config.ocr.adapter_type,
+            config=config.ocr,
             cache_dir=os.path.join(config.paths.cache_dir, "ocr"),
         )
         self.text_merger = TextMerger()
@@ -122,7 +124,10 @@ class Pipeline:
             self._run_stage("asr", context, force)
             self._run_stage("ocr", context, force)
 
-            # 阶段6: 文本合并
+            # 阶段6: ASR纠错（豆包后端，纠错后替换context.asr_results，后续所有模块基于纠错后文本）
+            self._run_stage("correct_asr", context, force)
+
+            # 阶段7: 文本合并
             self._run_stage("merge_text", context, force)
 
             # 阶段7-8: 知识点提取 + 题目提取（并行，mock阶段顺序执行）
@@ -228,6 +233,28 @@ class Pipeline:
         context.ocr_results = self.ocr_recognizer.recognize_frames(
             context.frame_paths, context.frame_timestamps, use_cache=not force
         )
+
+    def _stage_correct_asr(self, context: PipelineContext, force: bool):
+        """ASR纠错（豆包后端，纠错后替换context.asr_results）
+
+        重要：此阶段必须在merge_text之前执行，确保后续知识点提取、题目提取、
+        思维导图生成都基于纠错后的文本，而不是有同音词错误的原始文本。
+        """
+        if not context.asr_results:
+            logger.warning("[Pipeline] ASR结果为空，跳过纠错")
+            return
+
+        try:
+            from utils.asr_corrector import ASRCorrector
+            corrector = ASRCorrector(self.llm_client)
+            # 使用配置的默认服务商（config.llm.default_provider，默认volcengine/豆包）
+            default_provider = self.config.llm.default_provider
+            corrected = corrector.correct(context.asr_results, backend=default_provider)
+            context.asr_results = corrected
+            logger.info(f"[Pipeline] ASR纠错完成（服务商: {default_provider}）")
+        except Exception as e:
+            logger.error(f"[Pipeline] ASR纠错失败，使用原始逐字稿: {e}")
+            # 纠错失败不中断流水线，继续使用原始ASR结果
 
     def _stage_merge_text(self, context: PipelineContext):
         """ASR文本整理（只处理ASR，OCR不混入全文本）"""

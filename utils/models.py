@@ -117,6 +117,7 @@ class Problem:
     image_description: str = ""
     source: str = ""
     confidence: float = 1.0
+    asr_question_text: str = ""  # ASR识别的原题文本（用于与OCR原题对比，保留原始ASR记录）
 
 
 # === 四、LLM 相关 ===

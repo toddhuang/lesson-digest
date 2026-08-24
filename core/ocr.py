@@ -19,15 +19,25 @@ logger = setup_logger("M5_ocr")
 class OCRRecognizer:
     """文字识别器"""
 
-    def __init__(self, adapter_type: str = "mock", config: dict = None, cache_dir: str = "./cache/ocr"):
+    def __init__(self, adapter_type: str = "mock", config=None, cache_dir: str = "./cache/ocr"):
         self.adapter_type = adapter_type
-        self.config = config or {}
+        self.config = config
         self.cache_dir = cache_dir
         self._adapter: OCRAdapter = None
-        # 颜色过滤配置
-        ocr_config = self.config.get("ocr", {}) if isinstance(self.config, dict) else {}
-        self.enable_color_filter = ocr_config.get("enable_color_filter", True)
-        self.black_threshold = ocr_config.get("black_threshold", 80)
+        # 颜色过滤配置（支持OCRConfig对象或dict，向后兼容）
+        if hasattr(config, 'enable_color_filter'):
+            # OCRConfig对象
+            self.enable_color_filter = config.enable_color_filter
+            self.black_threshold = config.black_threshold
+        elif isinstance(config, dict):
+            # dict格式（向后兼容）
+            ocr_config = config.get("ocr", {})
+            self.enable_color_filter = ocr_config.get("enable_color_filter", True)
+            self.black_threshold = ocr_config.get("black_threshold", 80)
+        else:
+            # 默认值
+            self.enable_color_filter = True
+            self.black_threshold = 120
         self.processed_dir = os.path.join(cache_dir, "processed")
 
     def _get_adapter(self) -> OCRAdapter:
@@ -78,8 +88,9 @@ class OCRRecognizer:
         adapter = self._get_adapter()
 
         for i, (frame_path, timestamp) in enumerate(zip(frame_paths, frame_timestamps)):
-            # 缓存检查
-            cache_key = os.path.splitext(os.path.basename(frame_path))[0]
+            # 缓存检查（使用文件绝对路径的md5，避免不同视频的frame_0001.jpg冲突）
+            import hashlib
+            cache_key = hashlib.md5(os.path.abspath(frame_path).encode()).hexdigest()[:16]
             cache_path = os.path.join(self.cache_dir, f"{cache_key}.json")
 
             if use_cache and os.path.exists(cache_path):

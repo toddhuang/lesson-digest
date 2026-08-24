@@ -42,8 +42,9 @@ class ASRRecognizer:
         """
         logger.info(f"[M4] 语音识别: {audio_path}")
 
-        # 缓存检查
-        cache_key = os.path.splitext(os.path.basename(audio_path))[0]
+        # 缓存检查（使用文件绝对路径的md5，避免不同视频的audio.wav冲突）
+        import hashlib
+        cache_key = hashlib.md5(os.path.abspath(audio_path).encode()).hexdigest()[:16]
         cache_path = os.path.join(self.cache_dir, f"{cache_key}.json")
         if use_cache and os.path.exists(cache_path):
             logger.info(f"[M4] 命中缓存: {cache_path}")

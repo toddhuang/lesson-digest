@@ -15,7 +15,7 @@ logger = setup_logger("image_preprocess")
 def remove_color_keep_black(
     image_path: str,
     output_path: str,
-    black_threshold: int = 80,
+    black_threshold: int = 120,
     saturation_threshold: int = 40,
 ) -> str:
     """去除彩色部分，只保留黑色（或接近黑色）文字
@@ -68,7 +68,7 @@ def remove_color_keep_black(
 def preprocess_frame_for_ocr(
     image_path: str,
     output_dir: Optional[str] = None,
-    black_threshold: int = 80,
+    black_threshold: int = 120,
 ) -> str:
     """对视频帧进行 OCR 预处理（去除彩色手写，只保留黑色题目）
 

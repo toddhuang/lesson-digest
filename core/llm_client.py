@@ -120,7 +120,8 @@ class LLMClient:
 
         # 3. 缓存检查
         if use_cache:
-            cache_key = self._get_cache_key(messages, provider_name, temperature, top_p, max_tokens)
+            model_name = adapter.get_model_name()
+            cache_key = self._get_cache_key(messages, provider_name, model_name, temperature, top_p, max_tokens)
             cache_path = os.path.join(self.cache_dir, f"{cache_key}.json")
             if os.path.exists(cache_path):
                 logger.info(f"[M11] 命中LLM缓存: {cache_key[:8]}")
@@ -200,11 +201,12 @@ class LLMClient:
         adapter = self._get_adapter(provider_name)
         return adapter.get_context_length()
 
-    def _get_cache_key(self, messages, backend, temperature, top_p, max_tokens) -> str:
-        """计算缓存键"""
+    def _get_cache_key(self, messages, backend, model, temperature, top_p, max_tokens) -> str:
+        """计算缓存键（包含model，避免同一服务商切换模型时缓存错误命中）"""
         key_data = {
             "messages": messages,
             "backend": backend,
+            "model": model,
             "temperature": temperature,
             "top_p": top_p,
             "max_tokens": max_tokens,

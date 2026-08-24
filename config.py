@@ -33,10 +33,9 @@ class LLMProviderConfig:
 
 @dataclass
 class LLMConfig:
-    default_provider: str = "deepseek"
+    default_provider: str = "volcengine"
     providers: dict = field(default_factory=dict)  # key: provider名, value: LLMProviderConfig
     max_retries: int = 5
-    health_check_interval: int = 30
 
 
 @dataclass
@@ -52,6 +51,8 @@ class OCRConfig:
     adapter_type: str = "paddleocr"
     language: str = "ch"
     use_angle_cls: bool = True
+    enable_color_filter: bool = True  # 颜色过滤预处理（去除彩色手写，保留黑色印刷体）
+    black_threshold: int = 120  # 黑色阈值（RGB最大值低于此值视为黑色，保留）
 
 
 @dataclass

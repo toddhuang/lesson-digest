@@ -47,18 +47,11 @@ class OutputAssembler:
 
         output_files = OutputFiles(output_dir=video_output_dir)
 
-        # 1. 逐字稿（豆包纠错后直接输出，不保留原始未纠错版本）
+        # 1. 逐字稿（ASR纠错已在pipeline的correct_asr阶段完成，result.asr_results已是纠错后文本）
         transcript_path = os.path.join(video_output_dir, self.config.transcript_filename)
-        if self.llm_client and result.asr_results:
-            from utils.asr_corrector import ASRCorrector
-            corrector = ASRCorrector(self.llm_client)
-            try:
-                corrected = corrector.correct(result.asr_results, backend="volcengine")
-                self._write_transcript_with_sentences(corrected, transcript_path, result, "豆包纠错")
-                logger.info(f"[M12] 豆包纠错逐字稿: {transcript_path}")
-            except Exception as e:
-                logger.error(f"[M12] 豆包纠错失败，使用原始逐字稿: {e}")
-                self._write_transcript(result, transcript_path)
+        if result.asr_results:
+            self._write_transcript_with_sentences(result.asr_results, transcript_path, result, "纠错后")
+            logger.info(f"[M12] 逐字稿已输出（纠错后）: {transcript_path}")
         else:
             self._write_transcript(result, transcript_path)
         output_files.transcript_path = transcript_path
