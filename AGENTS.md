@@ -50,6 +50,31 @@
 3. **信息来源标注**：调研报告中必须注明每条结论的信息来源（官方文档链接、实际验证结果、MD5/哈希对比等）
 4. **教训记录**：调研中发现的错误假设、误导性信息、验证失败的方案，必须记录在调研报告的"调研教训"章节，并同步更新到 AGENTS.md（如影响全局）
 
+## GitHub Issue 管理规范
+
+### Issue 内容规范
+
+- **Issue body 只写问题描述**：调研目标、背景、待回答的问题、评估维度
+- **结论、产出物、状态更新用 comment 提交**，不要写在 body 中
+- **关闭 Issue 时添加 closing comment**：说明完成原因、核心结论、产出物链接（commit/文档）
+
+### 创建 Issue 的编码陷阱（已踩坑）
+
+通过 PowerShell `gh issue create --body` 创建 Issue 时，**here-string（`@"..."@`）会导致编码问题**：
+
+- 字母 `f` 可能被替换成 ASCII 控制字符 `\f`（form feed，0x0C）
+- 字母 `a` 可能被替换成 ASCII 控制字符 `^G`（bell，0x07）
+- 受影响的常见词：`from`、`fps`、`adapters` 等
+
+**验证方法**：创建后检查 body 是否包含控制字符：
+
+```powershell
+$body = gh issue view <num> --repo <repo> --json body | ConvertFrom-Json | Select-Object -ExpandProperty body
+if ($body -match '[\x00-\x08\x0B\x0C\x0E-\x1F]') { "发现控制字符乱码" }
+```
+
+**修复方法**：用 `gh issue edit --body` 重新写入正确内容。
+
 ## 技术栈
 
 - Python 3.11
