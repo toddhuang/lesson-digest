@@ -19,9 +19,8 @@ logger = setup_logger("M12_output")
 class OutputAssembler:
     """输出组装器"""
 
-    def __init__(self, config: OutputConfig, llm_client=None):
+    def __init__(self, config: OutputConfig):
         self.config = config
-        self.llm_client = llm_client
 
     def assemble(self, result: ProcessResult, output_dir: str) -> OutputFiles:
         """将所有处理结果组装为输出文件
@@ -122,9 +121,8 @@ class OutputAssembler:
         """写习题文件"""
         from core.problem_extractor import ProblemExtractor
 
-        # 创建一个临时的 ProblemExtractor 用于格式化
-        # 注意：这里不需要 llm_client，因为只调用 to_xxx_markdown 方法
-        formatter = ProblemExtractor(llm_client=None)
+        # 创建一个临时的 ProblemExtractor 用于格式化（不需要 LLM）
+        formatter = ProblemExtractor(llm=None)
         problem_files = []
 
         for i, problem in enumerate(result.problems):

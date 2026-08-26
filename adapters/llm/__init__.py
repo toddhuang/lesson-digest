@@ -5,16 +5,12 @@ LLM 适配层
 
 from adapters.llm.base import LLMAdapter
 from adapters.llm.mock import MockLLMAdapter
-from adapters.llm.openai_compatible import OpenAICompatibleAdapter
-from adapters.llm.deepseek import DeepSeekAdapter
-from adapters.llm.volcengine import VolcengineAdapter
+from adapters.llm.litellm_adapter import LiteLLMAdapter
 from adapters.llm.factory import create_llm_adapter
 
 __all__ = [
     "LLMAdapter",
     "MockLLMAdapter",
-    "OpenAICompatibleAdapter",
-    "DeepSeekAdapter",
-    "VolcengineAdapter",
+    "LiteLLMAdapter",
     "create_llm_adapter",
 ]

@@ -2,6 +2,12 @@
 M13 主流程编排模块（Pipeline）
 串联所有模块，管理执行顺序、并行控制、断点续传、错误处理。
 对应文档：03_接口设计/M13_主流程编排模块接口.md
+
+M11-M17 重构：
+- LLMClient 从 core.llm 导入，使用新的模型注册表+任务映射
+- pipeline 层负责为每个任务创建 LLMSession 并注入业务模块
+- 删除 LLM 层缓存（use_cache），缓存由 pipeline 层统一管理
+- ASR 纠错不再传 backend，由任务配置决定模型
 """
 
 import os
@@ -12,9 +18,8 @@ from typing import Optional
 from config import Config
 from utils.models import (
     ProcessResult, PipelineContext, PipelineProgress,
-    VideoInfo, Sentence, OCRFrameResult, KnowledgePoint, Problem
 )
-from utils.file_utils import ensure_dir, get_file_hash
+from utils.file_utils import get_file_hash
 from utils.logger import setup_logger
 from utils.exceptions import PipelineError, VideoNotFoundError, VideoContentError, LLMError
 
@@ -27,7 +32,7 @@ from core.knowledge_extractor import KnowledgeExtractor
 from core.problem_extractor import ProblemExtractor
 from core.screenshot_capture import ScreenshotCapture
 from core.mindmap_generator import MindmapGenerator
-from core.llm_client import LLMClient
+from core.llm import LLMClient
 from core.output_assembler import OutputAssembler
 
 logger = setup_logger("M13_pipeline")
@@ -52,12 +57,12 @@ STAGES = [
 class Pipeline:
     """主流程编排器"""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, mock_llm: bool = False):
         self.config = config
         self._progress = PipelineProgress(total_stages=len(STAGES))
         self._cancelled = False
 
-        # 初始化各模块
+        # 初始化非 LLM 模块
         self.audio_extractor = AudioExtractor(
             sample_rate=config.asr.sample_rate,
             channels=config.asr.channels,
@@ -77,15 +82,24 @@ class Pipeline:
             cache_dir=os.path.join(config.paths.cache_dir, "ocr"),
         )
         self.text_merger = TextMerger()
-        self.llm_client = LLMClient(
-            config.llm,
-            cache_dir=os.path.join(config.paths.cache_dir, "llm"),
-        )
-        self.knowledge_extractor = KnowledgeExtractor(self.llm_client)
-        self.problem_extractor = ProblemExtractor(self.llm_client)
         self.screenshot_capture = ScreenshotCapture(self.frame_extractor)
-        self.mindmap_generator = MindmapGenerator(self.llm_client)
-        self.output_assembler = OutputAssembler(config.output, self.llm_client)
+        self.output_assembler = OutputAssembler(config.output)
+
+        # 初始化 LLM 客户端和各业务模块
+        self.llm_client = LLMClient(
+            llm_config=config.llm,
+            tasks=config.tasks,
+            mock=mock_llm,
+        )
+        self.knowledge_extractor = KnowledgeExtractor(
+            self.llm_client.get_session("knowledge_extraction")
+        )
+        self.problem_extractor = ProblemExtractor(
+            self.llm_client.get_session("problem_extraction")
+        )
+        self.mindmap_generator = MindmapGenerator(
+            self.llm_client.get_session("mindmap_generation")
+        )
 
     def run(self, video_path: str, output_dir: str, force: bool = False) -> ProcessResult:
         """执行完整的视频处理流水线
@@ -93,7 +107,7 @@ class Pipeline:
         Args:
             video_path: 输入视频文件路径
             output_dir: 输出根目录
-            force: 是否强制重新处理（忽略缓存）
+            force: 是否强制重新处理（忽略 ASR/OCR 缓存）
 
         Returns:
             ProcessResult 对象
@@ -114,34 +128,17 @@ class Pipeline:
         context = PipelineContext(video_path=video_path)
 
         try:
-            # 阶段1: 探测视频信息
             self._run_stage("probe", context, force)
-
-            # 阶段2-3: 音轨提取 + 关键帧提取（并行，mock阶段顺序执行）
             self._run_stage("extract_audio", context, force)
             self._run_stage("extract_frames", context, force)
-
-            # 阶段4-5: ASR + OCR（并行，mock阶段顺序执行）
             self._run_stage("asr", context, force)
             self._run_stage("ocr", context, force)
-
-            # 阶段6: ASR纠错（豆包后端，纠错后替换context.asr_results，后续所有模块基于纠错后文本）
             self._run_stage("correct_asr", context, force)
-
-            # 阶段7: 文本合并
             self._run_stage("merge_text", context, force)
-
-            # 阶段7-8: 知识点提取 + 题目提取（并行，mock阶段顺序执行）
             self._run_stage("extract_knowledge", context, force)
             self._run_stage("extract_problems", context, force)
-
-            # 阶段9: 题目截图（依赖题目提取）
             self._run_stage("capture_screenshots", context, force)
-
-            # 阶段10: 思维导图生成（可与7/8并行，mock阶段顺序执行）
             self._run_stage("generate_mindmap", context, force)
-
-            # 阶段11: 输出组装
             self._run_stage("assemble_output", context, force, output_dir=output_dir)
 
             self._progress.is_running = False
@@ -185,17 +182,17 @@ class Pipeline:
             elif stage == "ocr":
                 self._stage_ocr(context, force)
             elif stage == "correct_asr":
-                self._stage_correct_asr(context, force)
+                self._stage_correct_asr(context)
             elif stage == "merge_text":
                 self._stage_merge_text(context)
             elif stage == "extract_knowledge":
-                self._stage_extract_knowledge(context, force)
+                self._stage_extract_knowledge(context)
             elif stage == "extract_problems":
-                self._stage_extract_problems(context, force)
+                self._stage_extract_problems(context)
             elif stage == "capture_screenshots":
                 self._stage_capture_screenshots(context)
             elif stage == "generate_mindmap":
-                self._stage_generate_mindmap(context, force)
+                self._stage_generate_mindmap(context)
             elif stage == "assemble_output":
                 self._stage_assemble_output(context, kwargs.get("output_dir", "./output"))
 
@@ -237,60 +234,52 @@ class Pipeline:
             context.frame_paths, context.frame_timestamps, use_cache=not force
         )
 
-    def _stage_correct_asr(self, context: PipelineContext, force: bool):
-        """ASR纠错（豆包后端，纠错后替换context.asr_results）
-
-        重要：此阶段必须在merge_text之前执行，确保后续知识点提取、题目提取、
-        思维导图生成都基于纠错后的文本，而不是有同音词错误的原始文本。
-        """
+    def _stage_correct_asr(self, context: PipelineContext):
+        """ASR纠错（纠错后替换context.asr_results，后续所有模块基于纠错后文本）"""
         if not context.asr_results:
             logger.warning("[Pipeline] ASR结果为空，跳过纠错")
             return
 
         try:
             from utils.asr_corrector import ASRCorrector
-            corrector = ASRCorrector(self.llm_client)
-            # 使用配置的默认服务商（config.llm.default_provider，默认volcengine/豆包）
-            default_provider = self.config.llm.default_provider
-            corrected = corrector.correct(context.asr_results, backend=default_provider)
+            corrector = ASRCorrector(self.llm_client.get_session("asr_correction"))
+            corrected = corrector.correct(context.asr_results)
             context.asr_results = corrected
-            logger.info(f"[Pipeline] ASR纠错完成（服务商: {default_provider}）")
+            logger.info("[Pipeline] ASR纠错完成")
         except LLMError as e:
             logger.error(f"[Pipeline] ASR纠错失败 ({type(e).__name__})，使用原始逐字稿: {e}")
-            # 纠错失败不中断流水线，继续使用原始ASR结果
 
     def _stage_merge_text(self, context: PipelineContext):
         """ASR文本整理（只处理ASR，OCR不混入全文本）"""
         context.full_text = self.text_merger.merge(context.asr_results)
 
-    def _stage_extract_knowledge(self, context: PipelineContext, force: bool):
+    def _stage_extract_knowledge(self, context: PipelineContext):
         """知识点提取"""
         context.knowledge_points = self.knowledge_extractor.extract(
-            context.full_text, context.video_info.duration, use_cache=not force
+            context.full_text, context.video_info.duration
         )
 
-    def _stage_extract_problems(self, context: PipelineContext, force: bool):
+    def _stage_extract_problems(self, context: PipelineContext):
         """题目提取"""
         context.problems = self.problem_extractor.extract(
-            context.full_text, context.video_info.duration, use_cache=not force,
+            context.full_text, context.video_info.duration,
             ocr_results=context.ocr_results
         )
 
     def _stage_capture_screenshots(self, context: PipelineContext):
         """题目截图"""
-        # 截图直接输出到最终目录
         video_name = os.path.splitext(os.path.basename(context.video_path))[0]
         screenshots_dir = os.path.join(self.config.paths.output_dir, video_name, self.config.output.screenshots_dirname)
         context.screenshot_paths = self.screenshot_capture.capture_screenshots(
             context.video_path, context.problems, screenshots_dir
         )
 
-    def _stage_generate_mindmap(self, context: PipelineContext, force: bool):
+    def _stage_generate_mindmap(self, context: PipelineContext):
         """思维导图生成"""
         video_name = os.path.splitext(os.path.basename(context.video_path))[0]
         context.mindmap_opml = self.mindmap_generator.generate(
             context.knowledge_points, video_title=video_name,
-            video_duration=context.video_info.duration, use_cache=not force
+            video_duration=context.video_info.duration
         )
 
     def _stage_assemble_output(self, context: PipelineContext, output_dir: str):

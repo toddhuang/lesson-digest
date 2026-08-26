@@ -30,8 +30,8 @@ stringzilla==5.1.1
 funasr==1.4.2
 modelscope>=1.0
 
-# === OpenAI SDK（DeepSeek / vLLM API 调用）===
-openai>=1.0
+# === LiteLLM（统一多模型调用：豆包/DeepSeek 等 OpenAI 兼容 API）===
+litellm>=1.98.0
 
 # === 图像处理 ===
 pillow>=10.0

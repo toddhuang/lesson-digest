@@ -2,6 +2,11 @@
 M10 思维导图生成模块
 基于知识点列表，生成课程知识结构（OPML格式）。
 对应文档：03_接口设计/M10_思维导图生成模块接口.md
+
+M11-M17 重构：
+- 依赖 LLMGenerator 协议，不依赖具体 LLMClient
+- 调用 generate(prompt, payload)，不感知模型/temperature/分块
+- 删除 use_cache 参数（缓存由 pipeline 层管理）
 """
 
 import os
@@ -12,7 +17,7 @@ from utils.models import KnowledgePoint
 from utils.timestamp import format_timestamp
 from utils.logger import setup_logger
 from utils.exceptions import OPMLValidationError
-from core.llm_client import LLMClient
+from core.llm.protocol import LLMGenerator
 
 logger = setup_logger("M10_mindmap")
 
@@ -35,44 +40,32 @@ SYSTEM_PROMPT = """你是一个教学内容结构整理助手。请根据以下�
 class MindmapGenerator:
     """思维导图生成器"""
 
-    def __init__(self, llm_client: LLMClient):
-        self.llm_client = llm_client
+    def __init__(self, llm: LLMGenerator):
+        self.llm = llm
 
     def generate(self, knowledge_points: List[KnowledgePoint], video_title: str = "",
-                 video_duration: float = 0, use_cache: bool = True) -> str:
+                 video_duration: float = 0) -> str:
         """基于知识点列表生成 OPML 思维导图
 
         Args:
             knowledge_points: 知识点列表
             video_title: 视频标题
             video_duration: 视频时长（秒）
-            use_cache: 是否使用缓存
 
         Returns:
             OPML 格式字符串
         """
         logger.info(f"[M10] 思维导图生成: {len(knowledge_points)}个知识点")
 
-        # 格式化知识点列表
         kp_text = "\n".join([
             f"{kp.index}. {kp.name} [{format_timestamp(kp.start_time)}]"
             for kp in knowledge_points
         ])
 
-        user_prompt = f"【视频标题】{video_title or '课程笔记'}\n【视频时长】{format_timestamp(video_duration, 'hh:mm:ss')}\n\n【知识点列表】\n{kp_text}"
+        payload = f"【视频标题】{video_title or '课程笔记'}\n【视频时长】{format_timestamp(video_duration, 'hh:mm:ss')}\n\n【知识点列表】\n{kp_text}"
 
-        response = self.llm_client.chat(
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            backend="cloud",
-            temperature=0.2,
-            max_tokens=4000,
-            use_cache=use_cache,
-        )
+        response = self.llm.generate(prompt=SYSTEM_PROMPT, payload=payload)
 
-        # 清理并校验 OPML
         opml_content = self._clean_opml(response.content)
         self._validate_opml(opml_content)
 
@@ -84,7 +77,6 @@ class MindmapGenerator:
         content = content.strip()
         if content.startswith("```"):
             lines = content.split("\n")
-            # 移除第一行和最后一行的代码块标记
             if lines[0].startswith("```"):
                 lines = lines[1:]
             if lines and lines[-1].strip() == "```":

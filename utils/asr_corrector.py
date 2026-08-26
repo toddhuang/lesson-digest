@@ -2,15 +2,18 @@
 ASR 纠错工具（v3）
 去掉时间戳和序号，纯文本喂给 LLM，避免误导并减少 token。
 返回后按行对应回原始句子的时间戳。
-支持 DeepSeek 和豆包（volcengine）两个云端后端对比。
+
+M11-M17 重构：
+- 依赖 LLMGenerator 协议，不依赖具体 LLMClient
+- 调用 generate(prompt, payload)，不感知模型/temperature/分块
+- 删除 backend 参数（模型由任务配置决定）
 """
 
-import re
 from typing import List
 
 from utils.models import Sentence
 from utils.logger import setup_logger
-from utils.exceptions import LLMError
+from core.llm.protocol import LLMGenerator
 
 logger = setup_logger("ASR_Corrector")
 
@@ -35,17 +38,16 @@ SYSTEM_PROMPT = """你是一个教学视频语音识别纠错助手。请根据�
 
 
 class ASRCorrector:
-    """ASR 纠错器（v3：纯文本输入，按行对应，支持多服务商）"""
+    """ASR 纠错器（纯文本输入，按行对应）"""
 
-    def __init__(self, llm_client):
-        self.llm_client = llm_client
+    def __init__(self, llm: LLMGenerator):
+        self.llm = llm
 
-    def correct(self, sentences: List[Sentence], backend: str = "cloud") -> List[Sentence]:
+    def correct(self, sentences: List[Sentence]) -> List[Sentence]:
         """对 ASR 句子进行纠错
 
         Args:
             sentences: 原始 ASR 句子列表
-            backend: LLM 后端（"cloud"=默认服务商, "deepseek"=DeepSeek, "volcengine"=豆包）
 
         Returns:
             纠错后的句子列表（时间戳不变，文本可能被修改）
@@ -53,63 +55,28 @@ class ASRCorrector:
         if not sentences:
             return []
 
-        logger.info(f"[ASR纠错] 开始纠错: {len(sentences)}句, 后端={backend}")
+        logger.info(f"[ASR纠错] 开始纠错: {len(sentences)}句")
 
-        # 拼接纯文本（每行一句，不带时间戳和序号）
         full_text = "\n".join(sent.text for sent in sentences)
-
-        # 云端服务商（DeepSeek/豆包）上下文大，一次喂完整文本
-        corrected_text = self._correct_single(full_text, backend)
+        corrected_text = self._correct_single(full_text)
         corrected_lines = corrected_text.split("\n")
 
-        # 按行对应回原始句子的时间戳
         result = self._align_lines(sentences, corrected_lines)
 
         logger.info(f"[ASR纠错] 完成: {len(result)}句")
         return result
 
-    def _correct_single(self, text: str, backend: str) -> str:
-        """调用 LLM 纠错单段文本
-
-        Args:
-            text: 待纠错文本（每行一句）
-            backend: LLM 后端
-
-        Returns:
-            纠错后的文本
-        """
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": text},
-        ]
-
-        try:
-            response = self.llm_client.chat(
-                messages=messages,
-                backend=backend,
-                temperature=0.1,
-                max_tokens=8000,
-            )
-            return response.content.strip()
-        except LLMError as e:
-            logger.error(f"[ASR纠错] LLM调用失败 ({type(e).__name__}): {e}，使用原文")
-            return text
+    def _correct_single(self, text: str) -> str:
+        """调用 LLM 纠错单段文本"""
+        response = self.llm.generate(prompt=SYSTEM_PROMPT, payload=text)
+        return response.content.strip()
 
     def _align_lines(self, original: List[Sentence], corrected_lines: List[str]) -> List[Sentence]:
-        """把纠错后的行对应回原始句子的时间戳
-
-        Args:
-            original: 原始句子列表
-            corrected_lines: 纠错后的文本行列表
-
-        Returns:
-            对应后的句子列表
-        """
+        """把纠错后的行对应回原始句子的时间戳"""
         result = []
         cleaned_lines = [line.strip() for line in corrected_lines if line.strip()]
 
         if len(cleaned_lines) == len(original):
-            # 行数完全匹配，一一对应
             for i, sent in enumerate(original):
                 new_text = cleaned_lines[i]
                 if new_text:
@@ -123,17 +90,13 @@ class ASRCorrector:
                     result.append(sent)
             logger.info(f"[ASR纠错] 行数匹配: {len(original)}句，一一对应")
         else:
-            # 行数不匹配，用文本相似度匹配
             logger.warning(f"[ASR纠错] 行数不匹配: 原始{len(original)}句, 纠错后{len(cleaned_lines)}行，使用相似度匹配")
             result = self._match_by_similarity(original, cleaned_lines)
 
         return result
 
     def _match_by_similarity(self, original: List[Sentence], corrected: List[str]) -> List[Sentence]:
-        """用文本相似度把纠错后的行匹配到原始句子
-
-        简单策略：按顺序贪心匹配，相似度最高的对应。
-        """
+        """用文本相似度把纠错后的行匹配到原始句子"""
         result = []
         used = set()
 
@@ -158,7 +121,6 @@ class ASRCorrector:
                     confidence=sent.confidence,
                 ))
             else:
-                # 匹配不上，保留原文
                 result.append(sent)
 
         return result

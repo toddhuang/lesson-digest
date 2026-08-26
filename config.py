@@ -2,15 +2,31 @@
 M1 配置管理模块
 加载/校验 YAML 配置，集中管理所有参数。
 对应文档：03_接口设计/M1_配置管理模块接口.md
+
+重构记录（M11-M17）：
+- 删除 .env / python-dotenv 双配置系统，统一 config.yaml
+- 新增模型注册表（models）、服务商配置（providers）、任务映射（tasks）
+- API Key 直接写在 config.yaml 中（config.yaml 已加入 .gitignore）
+- 删除 LLM 层缓存配置（缓存由 pipeline 层管理）
 """
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from enum import Enum
+from typing import Dict, List, Optional
 
 import yaml
 
 from utils.exceptions import ConfigError
+
+
+# === 枚举 ===
+
+class ModelCapability(Enum):
+    """模型能力标识"""
+    TEXT = "text"
+    REASONING = "reasoning"
+    VISION = "vision"
 
 
 # === 配置数据类 ===
@@ -23,19 +39,37 @@ class VideoConfig:
 
 
 @dataclass
-class LLMProviderConfig:
-    """单个 LLM 服务商配置"""
-    base_url: str = ""
-    model: str = ""
+class ModelConfig:
+    """单个模型配置（模型注册表条目）"""
+    name: str = ""
+    provider: str = ""
+    capabilities: List[str] = field(default_factory=list)
     context_length: int = 131072
+    max_output: int = 8192
+
+
+@dataclass
+class ProviderConfig:
+    """LLM 服务商配置"""
+    base_url: str = ""
     api_key: str = ""
+    litellm_prefix: str = "openai"
+
+
+@dataclass
+class TaskConfig:
+    """任务-模型映射配置"""
+    model: str = ""
+    temperature: float = 0.1
 
 
 @dataclass
 class LLMConfig:
-    default_provider: str = "volcengine"
-    providers: dict = field(default_factory=dict)  # key: provider名, value: LLMProviderConfig
-    max_retries: int = 5
+    """LLM 全局配置"""
+    models: Dict[str, ModelConfig] = field(default_factory=dict)
+    providers: Dict[str, ProviderConfig] = field(default_factory=dict)
+    max_retries: int = 3
+    timeout: int = 120
 
 
 @dataclass
@@ -51,8 +85,8 @@ class OCRConfig:
     adapter_type: str = "paddleocr"
     language: str = "ch"
     use_angle_cls: bool = True
-    enable_color_filter: bool = True  # 颜色过滤预处理（去除彩色手写，保留黑色印刷体）
-    black_threshold: int = 120  # 黑色阈值（RGB最大值低于此值视为黑色，保留）
+    enable_color_filter: bool = True
+    black_threshold: int = 120
 
 
 @dataclass
@@ -77,7 +111,6 @@ class PathsConfig:
 class CacheConfig:
     cache_ocr_frames: bool = True
     max_cache_size_gb: int = 400
-    llm_cache: bool = True
 
 
 @dataclass
@@ -85,6 +118,7 @@ class Config:
     """全局配置根对象"""
     video: VideoConfig = field(default_factory=VideoConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    tasks: Dict[str, TaskConfig] = field(default_factory=dict)
     asr: ASRConfig = field(default_factory=ASRConfig)
     ocr: OCRConfig = field(default_factory=OCRConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
@@ -104,25 +138,17 @@ class ConfigManager:
     def load(self) -> Config:
         """加载配置文件
 
-        加载顺序（后者覆盖前者）：
-        1. config.yaml 默认配置
-        2. .env 文件中的环境变量
-        3. 系统环境变量
-
         Returns:
             Config 对象
 
         Raises:
             ConfigError: 配置文件不存在或格式错误
         """
-        # 1. 加载 .env 文件（在加载 config.yaml 之前，确保环境变量可用）
-        self._load_dotenv()
-
         if not os.path.exists(self.config_path):
-            # 配置文件不存在，使用默认配置
-            self._validate()
-            self._load_env_vars()
-            return self.config
+            raise ConfigError(
+                f"配置文件不存在: {self.config_path}，"
+                f"请复制 config.example.yaml 为 config.yaml 并填写 API Key"
+            )
 
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
@@ -132,41 +158,7 @@ class ConfigManager:
 
         self._apply_dict(data)
         self._validate()
-        self._load_env_vars()
         return self.config
-
-    def _load_dotenv(self) -> None:
-        """加载项目根目录下的 .env 文件
-
-        简单的 .env 解析器，不依赖 python-dotenv 库。
-        支持 KEY=VALUE 格式，忽略空行和 # 开头的注释行。
-        """
-        dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-        if not os.path.exists(dotenv_path):
-            return
-
-        try:
-            with open(dotenv_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    # 忽略空行和注释
-                    if not line or line.startswith("#"):
-                        continue
-                    # 解析 KEY=VALUE
-                    if "=" in line:
-                        key, _, value = line.partition("=")
-                        key = key.strip()
-                        value = value.strip()
-                        # 去除引号
-                        if (value.startswith('"') and value.endswith('"')) or \
-                           (value.startswith("'") and value.endswith("'")):
-                            value = value[1:-1]
-                        # 只设置未存在的环境变量（不覆盖已有的系统环境变量）
-                        if key and key not in os.environ:
-                            os.environ[key] = value
-        except (FileNotFoundError, PermissionError, UnicodeDecodeError, OSError):
-            # .env 文件读取失败不影响主流程
-            pass
 
     def _apply_dict(self, data: dict) -> None:
         """将字典数据应用到配置对象"""
@@ -176,22 +168,15 @@ class ConfigManager:
                     setattr(self.config.video, k, v)
 
         if "llm" in data:
-            llm_data = data["llm"]
-            # default_provider
-            if "default_provider" in llm_data:
-                self.config.llm.default_provider = llm_data["default_provider"]
-            # providers
-            if "providers" in llm_data and isinstance(llm_data["providers"], dict):
-                for provider_name, provider_data in llm_data["providers"].items():
-                    if isinstance(provider_data, dict):
-                        provider_config = LLMProviderConfig()
-                        for k, v in provider_data.items():
-                            if hasattr(provider_config, k):
-                                setattr(provider_config, k, v)
-                        self.config.llm.providers[provider_name] = provider_config
-            for k in ("max_retries",):
-                if k in llm_data:
-                    setattr(self.config.llm, k, llm_data[k])
+            self._apply_llm_config(data["llm"])
+
+        if "tasks" in data and isinstance(data["tasks"], dict):
+            for task_name, task_data in data["tasks"].items():
+                if isinstance(task_data, dict):
+                    self.config.tasks[task_name] = TaskConfig(
+                        model=task_data.get("model", ""),
+                        temperature=task_data.get("temperature", 0.1),
+                    )
 
         if "asr" in data:
             for k, v in data["asr"].items():
@@ -218,8 +203,42 @@ class ConfigManager:
                 if hasattr(self.config.cache, k):
                     setattr(self.config.cache, k, v)
 
+    def _apply_llm_config(self, llm_data: dict) -> None:
+        """解析 LLM 配置段"""
+        # max_retries / timeout
+        if "max_retries" in llm_data:
+            self.config.llm.max_retries = llm_data["max_retries"]
+        if "timeout" in llm_data:
+            self.config.llm.timeout = llm_data["timeout"]
+
+        # models（模型注册表，列表格式）
+        if "models" in llm_data and isinstance(llm_data["models"], list):
+            for model_data in llm_data["models"]:
+                if not isinstance(model_data, dict):
+                    continue
+                model_config = ModelConfig(
+                    name=model_data.get("name", ""),
+                    provider=model_data.get("provider", ""),
+                    capabilities=model_data.get("capabilities", []),
+                    context_length=model_data.get("context_length", 131072),
+                    max_output=model_data.get("max_output", 8192),
+                )
+                if model_config.name:
+                    self.config.llm.models[model_config.name] = model_config
+
+        # providers（服务商配置）
+        if "providers" in llm_data and isinstance(llm_data["providers"], dict):
+            for provider_name, provider_data in llm_data["providers"].items():
+                if not isinstance(provider_data, dict):
+                    continue
+                self.config.llm.providers[provider_name] = ProviderConfig(
+                    base_url=provider_data.get("base_url", ""),
+                    api_key=provider_data.get("api_key", ""),
+                    litellm_prefix=provider_data.get("litellm_prefix", "openai"),
+                )
+
     def _validate(self) -> None:
-        """校验配置参数合法性"""
+        """校验配置参数合法性和引用完整性"""
         if self.config.video.frame_interval <= 0:
             raise ConfigError("video.frame_interval 必须大于 0")
         if self.config.llm.max_retries < 0:
@@ -227,37 +246,45 @@ class ConfigManager:
         if self.config.cache.max_cache_size_gb <= 0:
             raise ConfigError("cache.max_cache_size_gb 必须大于 0")
 
-    def _load_env_vars(self) -> None:
-        """从环境变量加载敏感信息（API Key、模型名、服务地址等）
+        # 校验模型注册表中每个模型引用的服务商是否存在
+        for model_name, model_config in self.config.llm.models.items():
+            if not model_config.provider:
+                raise ConfigError(f"模型 {model_name} 未指定 provider")
+            if model_config.provider not in self.config.llm.providers:
+                raise ConfigError(
+                    f"模型 {model_name} 引用了未配置的服务商: {model_config.provider}，"
+                    f"已配置: {list(self.config.llm.providers.keys())}"
+                )
+            if model_config.context_length <= 0:
+                raise ConfigError(f"模型 {model_name} 的 context_length 必须大于 0")
+            if model_config.max_output <= 0:
+                raise ConfigError(f"模型 {model_name} 的 max_output 必须大于 0")
 
-        环境变量优先级高于 config.yaml，确保敏感信息不写入配置文件。
-        支持的服务商：deepseek、volcengine（可扩展）
-        """
-        # 服务商环境变量映射表
-        # 格式：{ 服务商名: { 配置字段: 环境变量名 } }
-        provider_env_map = {
-            "deepseek": {
-                "api_key": "DEEPSEEK_API_KEY",
-                "model": "DEEPSEEK_MODEL",
-                "base_url": "DEEPSEEK_BASE_URL",
-            },
-            "volcengine": {
-                "api_key": "VOLCENGINE_API_KEY",
-                "model": "VOLCENGINE_MODEL",
-                "base_url": "VOLCENGINE_BASE_URL",
-            },
-        }
+        # 校验每个任务引用的模型是否存在
+        for task_name, task_config in self.config.tasks.items():
+            if not task_config.model:
+                raise ConfigError(f"任务 {task_name} 未指定 model")
+            if task_config.model not in self.config.llm.models:
+                raise ConfigError(
+                    f"任务 {task_name} 引用了未注册的模型: {task_config.model}，"
+                    f"已注册: {list(self.config.llm.models.keys())}"
+                )
+            if not 0.0 <= task_config.temperature <= 2.0:
+                raise ConfigError(
+                    f"任务 {task_name} 的 temperature 必须在 0.0-2.0 之间，当前: {task_config.temperature}"
+                )
 
-        for provider_name, env_map in provider_env_map.items():
-            # 确保服务商配置存在
-            if provider_name not in self.config.llm.providers:
-                self.config.llm.providers[provider_name] = LLMProviderConfig()
+        # 校验服务商 api_key 非空（仅校验被模型引用的服务商）
+        referenced_providers = {m.provider for m in self.config.llm.models.values()}
+        for provider_name in referenced_providers:
             provider_config = self.config.llm.providers[provider_name]
-
-            for field_name, env_var_name in env_map.items():
-                env_value = os.environ.get(env_var_name, "")
-                if env_value:
-                    setattr(provider_config, field_name, env_value)
+            if not provider_config.api_key:
+                raise ConfigError(
+                    f"服务商 {provider_name} 的 api_key 未配置，"
+                    f"请在 config.yaml 中填写"
+                )
+            if not provider_config.base_url:
+                raise ConfigError(f"服务商 {provider_name} 的 base_url 未配置")
 
     def get(self) -> Config:
         """获取当前配置"""
