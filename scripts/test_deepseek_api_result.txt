@@ -1,0 +1,54 @@
+======================================================================
+  DeepSeek API 验证报告
+  模型: deepseek-v4-pro
+  时间: 2026-08-27 11:52:01
+======================================================================
+上下文长度: 131072
+最大输出: 8192
+
+======================================================================
+  测试1: LiteLLM Chat Completions 基本调用
+======================================================================
+模型: openai/deepseek-v4-pro
+base_url: https://api.deepseek.com
+耗时: 5.7s
+finish_reason: stop
+content:
+A∩B = {2, 3}
+
+A∪B = {1, 2, 3, 4}
+usage: prompt=112, completion=95, total=207
+
+[发现] reasoning_content 字段存在，长度=94
+reasoning_content 前300字: 我们需要回答中文题目。需要求 A∩B 和 A∪B。A={1,2,3}, B={2,3,4}。交集 {2,3}，并集 {1,2,3,4}。简单。需要注意集合元素无序，但通常升序。最终用中文。
+message 其他属性: ['construct', 'copy', 'dict', 'from_orm', 'function_call', 'get', 'json', 'model_computed_fields', 'model_config', 'model_construct', 'model_copy', 'model_dump', 'model_dump_json', 'model_extra', 'model_fields', 'model_fields_set', 'model_json_schema', 'model_parametrized_name', 'model_post_init', 'model_rebuild', 'model_validate', 'model_validate_json', 'model_validate_strings', 'parse_file', 'parse_obj', 'parse_raw', 'provider_specific_fields', 'reasoning_content', 'schema', 'schema_json', 'to_dict', 'to_json', 'tool_calls', 'update_forward_refs', 'validate']
+
+======================================================================
+  测试2: LiteLLM 流式调用
+======================================================================
+耗时: 2.6s
+finish_reason: stop
+content 长度: 85
+content 前300字:
+已知 \(A=\{1,2,3\}\)，\(B=\{2,3,4\}\)。
+
+\[
+A\cap B=\{2,3\}
+\]
+
+\[
+A\cup B=\{1,2,3,4\}
+\]
+
+reasoning_content 长度: 66
+reasoning_content 前300字: 我们需要回答中文题。需要求交集并集。A={1,2,3}, B={2,3,4}。交集 {2,3}，并集 {1,2,3,4}。直接回答。
+
+delta 属性: {'dict', 'model_fields', 'model_validate', 'model_copy', 'model_post_init', 'construct', 'parse_raw', 'model_computed_fields', 'schema_json', 'model_construct', 'get', 'model_validate_strings', 'model_fields_set', 'model_parametrized_name', 'update_forward_refs', 'provider_specific_fields', 'from_orm', 'parse_file', 'to_dict', 'to_json', 'json', 'model_validate_json', 'reasoning_content', 'model_rebuild', 'validate', 'copy', 'parse_obj', 'model_config', 'model_json_schema', 'schema', 'model_dump_json', 'model_extra'}
+usage: prompt=39, completion=61, total=100
+
+======================================================================
+  测试3: 异常处理 - 无效模型名
+======================================================================
+异常类型: BadRequestError
+异常消息: litellm.BadRequestError: OpenAIException - The supported API model names are deepseek-v4-pro, deepseek-v4-flash, and deepseek-v4-flash-vision-exp, but you passed deepseek-nonexistent-model.
+HTTP status: 400

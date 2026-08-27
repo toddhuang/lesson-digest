@@ -1,8 +1,27 @@
 # R-001 豆包（火山引擎）API 调研报告
 
-> 调研日期：2026-08-24
-> 调研人：AI Assistant
-> 文档版本：v1.0
+> 调研日期：2026-08-24（文档调研），2026-08-27（实测验证）
+> 文档版本：v2.0（含实测验证）
+> 实测模型：doubao-seed-2-1-pro-260628、deepseek-v4-pro
+> 实测脚本：scripts/test_doubao_api.py、scripts/test_deepseek_api.py
+
+---
+
+## 总结论
+
+**Chat Completions API 已能满足需求，无需切换到 Responses API。**
+
+实测发现豆包和 DeepSeek 在 Chat Completions 格式下均通过 `reasoning_content` 字段返回思维链内容，LiteLLM 可直接接收。当前 LiteLLM 适配器只需补充收集 `delta.reasoning_content` 即可支持深度思考，无需重写为 Responses API。
+
+| 验证项 | 结论 |
+|---|---|
+| 豆包 Chat Completions 返回 reasoning_content | **已验证**，非流式和流式均有 |
+| DeepSeek Chat Completions 返回 reasoning_content | **已验证**，非流式和流式均有 |
+| 是否必须用 Responses API | **否**，Chat Completions 已返回思维链 |
+| thinking 参数通过 LiteLLM extra_body 传递 | **已验证**，参数被接受 |
+| 非流式调用是否超时 | 简单问题 20s 正常返回；长任务仍建议流式 |
+| 多模态输入 | **已验证**，Responses API 的 input_image + input_text 格式可用 |
+| 错误码分类 | **已验证**，无效模型返回 400 BadRequestError |
 
 ---
 
@@ -40,10 +59,17 @@
 
 | 接口 | 端点 | 特点 | 推荐场景 |
 |---|---|---|---|
-| **Responses API** | `POST /api/v3/responses` | 新一代 API，原生支持深度思考、多模态、工具调用、结构化输出、上下文缓存 | **推荐**，所有新功能使用此接口 |
-| Chat API | `POST /api/v3/chat/completions` | 兼容 OpenAI 格式，部分老模型仅支持此接口 | 仅用于兼容老代码 |
+| Responses API | `POST /api/v3/responses` | 新一代 API，原生支持深度思考、多模态、工具调用、结构化输出、上下文缓存 | 多模态输入（图片+文本） |
+| Chat API | `POST /api/v3/chat/completions` | 兼容 OpenAI 格式，LiteLLM 统一调用 | **文本生成主力接口** |
 
-**结论：重构后统一使用 Responses API。** 当前代码中 `VolcengineAdapter` 已使用 `client.responses.create()`，方向正确，但需完善深度思考和流式处理。
+**实测结论（2026-08-27 修正）**：
+
+原报告认为"必须使用 Responses API 才能获取思维链"，**实测验证此结论不成立**。豆包 doubao-seed-2-1-pro 在 Chat Completions 格式下，响应消息中已包含 `reasoning_content` 字段（非流式 237 字，流式通过 `delta.reasoning_content` 增量返回）。DeepSeek-v4-pro 同样如此。
+
+因此：
+- **文本生成**：继续使用 Chat Completions（LiteLLM），只需在适配器中补充收集 `reasoning_content`
+- **多模态输入**：使用 Responses API（Chat Completions 的多模态格式未在本次验证中测试，Responses API 已验证可用）
+- 当前代码通过 LiteLLM 走 Chat Completions 的方向是正确的，不需要重写
 
 ### 三、深度思考（Thinking）机制
 
@@ -85,15 +111,19 @@
 | `response.output_text.done` | 最终回答完成（含聚合文本） |
 | `response.completed` | 全部完成（含 usage 统计） |
 
-#### 3.3 超时处理（关键风险）
+#### 3.3 超时处理
 
-> **官方明确警告**：深度思考模型在非流式输出场景中容易因超时导致任务失败，**推荐使用流式输出**。
+> **官方警告**：深度思考模型在非流式输出场景中容易因超时导致任务失败，推荐使用流式输出。
+
+**实测验证（2026-08-27）**：
+- 简单数学题（集合交集并集）非流式 + thinking 开启：20.8 秒正常返回，未超时
+- 流式 + thinking：25.7 秒完成
+- 对于长文本处理（如 ASR 纠错 8000 字），非流式仍有超时风险，**建议统一使用流式**
 
 实践要求：
-1. 所有深度思考调用**必须使用流式模式**（`stream=True`）
-2. 如业务需要非流式结果，先以流式获取完整内容后再聚合
-3. `timeout` 设置要足够大（深度思考可能需要 30-120 秒）
-4. `max_output_tokens` = 思维链长度 + 回答长度，需设置足够大（建议至少 8192，复杂任务 16384+）
+1. 所有 LLM 调用**内部统一使用流式模式**（`stream=True`），聚合后返回上层（当前 LiteLLM 适配器已实现）
+2. `timeout` 设置要足够大（深度思考可能需要 30-120 秒）
+3. `max_output_tokens` / `max_tokens` 需设置足够大（建议至少 8192，复杂任务 16384+）
 
 ### 四、多模态输入格式
 
@@ -137,44 +167,113 @@ Responses API 的 `input` 字段支持两种格式：
 
 ### 六、当前代码 `VolcengineAdapter` 的问题清单
 
-1. **非流式调用**：`client.responses.create(stream=False)`，深度思考模型容易超时
-2. **未处理思维链**：直接取 `output_text`，忽略了 `reasoning` 部分
-3. **`thinking` 硬编码 disabled**：`extra_body={"thinking": {"type": "disabled"}}`，关闭了深度思考
-4. **`max_tokens` 命名错误**：Responses API 用 `max_output_tokens`，当前传 `max_tokens` 可能不生效
-5. **裸 `except Exception`**：未分类处理异常（对应代码问题追踪 C-002）
-6. **硬编码默认配置**：`default_config` 中写死 model 名称（对应代码问题追踪 C-003）
+> 2026-08-27 更新：VolcengineAdapter 已被 LiteLLMAdapter 替代（Issues #2-#5），以下问题状态已更新。
+
+1. ~~**非流式调用**~~：**已修复**，LiteLLMAdapter 内部统一 `stream=True`
+2. **未处理思维链**：**待修复**，Chat Completions 响应中 `reasoning_content` 字段已确认存在，但 `_collect_stream()` 只收集 `delta.content`，需补充收集 `delta.reasoning_content`
+3. ~~**thinking 硬编码 disabled**~~：**已移除**，当前代码不设置 thinking 参数（模型默认开启）
+4. ~~**max_tokens 命名错误**~~：**不适用**，LiteLLM 走 Chat Completions 格式，`max_tokens` 是正确参数名
+5. ~~**裸 except Exception**~~：**已修复**，LiteLLMAdapter 分类捕获各异常类型
+6. ~~**硬编码默认配置**~~：**已修复**，模型名从 ModelConfig 读取
 
 ---
 
-## 额外建议
+## 七、实测验证详情（2026-08-27）
 
-### 建议 1：每个 LLM 任务独立配置
+### 7.1 豆包 doubao-seed-2-1-pro-260628
 
-在 `config.yaml` 的 `llm.tasks` 下为每个任务独立配置 provider、model、thinking、reasoning_effort、max_output_tokens、timeout、temperature：
+**测试1：LiteLLM Chat Completions 基本调用**
+- 耗时 23.7s，HTTP 200
+- `reasoning_content` 字段存在（237 字），通过 `message.reasoning_content` 获取
+- 内容质量好，正确使用 LaTeX 格式
+- usage: prompt=75, completion=1042, total=1117
 
-| 任务 | 推荐 model | thinking | effort | max_output_tokens | timeout |
-|---|---|---|---|---|---|
-| ASR 纠错 | doubao-seed-2-1-pro | enabled | medium | 8192 | 120s |
-| 知识点+题目粗提取（一次调用） | doubao-seed-2-1-pro | enabled | high | 16384 | 180s |
-| 知识点深度整理 | doubao-seed-2-1-pro | enabled | high | 8192 | 120s |
-| 题目原题/解题分离 | doubao-seed-2-1-pro | enabled | high | 8192 | 120s |
-| 思维导图生成 | doubao-seed-2-1-turbo | disabled | - | 4096 | 60s |
+**测试2：LiteLLM 通过 extra_body 传 thinking 参数**
+- 耗时 21.8s，参数被接受
+- `reasoning_content` 存在（219 字）
+- 模型即使不显式传 thinking 参数也会返回 reasoning_content（2.1 pro 默认开启深度思考）
 
-### 建议 2：流式调用封装
+**测试3：直连 Responses API 流式**
+- 耗时 25.7s，HTTP 200
+- 事件类型：`response.reasoning_summary_text.delta`（307 条）、`response.output_text.delta`（411 条）
+- reasoning_summary 长度 597 字，output_text 长度 574 字
+- 注意：`requests.iter_lines(decode_unicode=True)` 对 SSE 流的中文解码有乱码问题，非流式无此问题
+- 结论：如需直连 Responses API 流式，需正确处理编码；通过 LiteLLM 则无此问题
 
-在 LLM 适配层统一封装流式调用逻辑，对外暴露同步接口（内部流式聚合），避免每个业务模块都处理 SSE 事件。思维链摘要可保存到 debug，最终回答返回给业务层。
+**测试4：直连 Responses API 非流式**
+- 耗时 20.8s，HTTP 200
+- output 结构：`output[0].type="reasoning"`（含 summary_text）+ `output[1].type="message"`（含 output_text）
+- usage 包含 `output_tokens_details.reasoning_tokens`: 782
+- 中文正常，无编码问题
 
-### 建议 3：异常分类重试机制
+**测试5：Responses API 多模态输入**
+- 耗时 10.6s，HTTP 200
+- 使用 `input_image`（base64）+ `input_text` 格式
+- 正确识别图片中的文字内容和颜色
 
-实现统一的重试装饰器：
-- 429 限流：指数退避（初始 1s，最大 30s，最多 5 次）
-- 500 服务端错误：固定延迟重试（最多 3 次）
-- 超时：检查是否非流式调用深度思考模型，自动降级为流式后重试
-- 400/401/403：不重试，立即抛出明确异常
+### 7.2 DeepSeek deepseek-v4-pro
 
-### 建议 4：思维链 debug 输出
+**测试1：LiteLLM Chat Completions 基本调用**
+- 耗时 5.7s，HTTP 200
+- `reasoning_content` 字段存在（94 字），通过 `message.reasoning_content` 获取
+- usage: prompt=112, completion=95, total=207
+- 回答简洁，直接给出结果
 
-深度思考模型的 reasoning 摘要可保存到 `debug/{视频名}/llm_reasoning/` 下，用于分析模型推理过程，排查输出质量问题。
+**测试2：LiteLLM 流式调用**
+- 耗时 2.6s，HTTP 200
+- `delta.reasoning_content` 增量返回（66 字）
+- `delta.content` 增量返回（85 字）
+- usage 正常返回
+
+**测试3：异常处理**
+- 无效模型名返回 400 BadRequestError
+- 错误消息明确列出支持的模型：`deepseek-v4-pro, deepseek-v4-flash, deepseek-v4-flash-vision-exp`
+- 注意：DeepSeek 有视觉模型 `deepseek-v4-flash-vision-exp`（实验性）
+
+### 7.3 两家对比
+
+| 维度 | 豆包 doubao-seed-2-1-pro | DeepSeek deepseek-v4-pro |
+|---|---|---|
+| 响应速度（简单问题） | ~22s | ~5s |
+| reasoning_content 长度 | 200-600 字 | 60-100 字 |
+| 回答风格 | 详细讲解，LaTeX 格式 | 简洁直接 |
+| 思维链获取方式 | Chat Completions 的 `reasoning_content` | 相同 |
+| 多模态 | Responses API 已验证 | 有 vision-exp 模型（未验证） |
+| 适用场景 | 知识点整理、题目解析（需要详细讲解） | ASR 纠错、简单提取（速度快） |
+
+### 7.4 对代码的影响
+
+1. **LLMResponse 需新增 `reasoning_content` 字段**，用于保存思维链（可输出到 debug）
+2. **LiteLLMAdapter._collect_stream() 需补充收集 `delta.reasoning_content`**
+3. **不需要切换到 Responses API**，Chat Completions 已满足文本生成需求
+4. **多模态场景**（将来 OCR+LLM）需单独处理，可通过 LiteLLM 的 OpenAI 兼容多模态格式或直连 Responses API
+5. **thinking 控制**：豆包 2.1 pro 默认开启 thinking，是否需要按任务关闭以节省 token 待讨论
+
+---
+
+## 八、建议（按实测更新）
+
+### 建议 1：任务-模型映射（已实现）
+
+`config.yaml` 的 `tasks` 节已支持每个任务独立配置 model 和 temperature。thinking/reasoning 参数暂不需要在配置中暴露——豆包 2.1 pro 默认开启深度思考，通过 Chat Completions 的 `reasoning_content` 即可获取思维链。
+
+实测速度对比：豆包 ~22s vs DeepSeek ~5s（简单问题）。DeepSeek 适合对速度敏感的任务（如 ASR 纠错），豆包适合需要详细讲解的任务（知识点整理、题目解析）。
+
+### 建议 2：流式调用封装（已实现）
+
+LiteLLMAdapter 已统一内部流式接收、对外同步返回。需补充：收集 `delta.reasoning_content` 并放入 LLMResponse。
+
+### 建议 3：异常分类（已实现）
+
+LiteLLMAdapter 已分类捕获 BadRequestError / AuthenticationError / RateLimitError / InternalServerError / Timeout / APIConnectionError，映射为项目自定义异常。
+
+### 建议 4：思维链 debug 输出（待实现）
+
+深度思考模型的 `reasoning_content` 可保存到 `debug/{视频名}/llm_reasoning/` 下，用于分析模型推理过程，排查输出质量问题。
+
+### 建议 5：多模态支持（待实现）
+
+将来 OCR+LLM 融合时，多模态输入通过 Responses API 的 `input_image` + `input_text` 格式（已验证可用），或通过 LiteLLM 的 OpenAI 兼容多模态格式。
 
 ---
 

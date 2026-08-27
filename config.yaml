@@ -1,6 +1,6 @@
-# 教学视频内容提取与总结工具 - 配置文件
-# 此文件包含 API Key，已加入 .gitignore，不会提交到 GitHub
-# 新增模型或服务商时，在此文件中配置即可，无需修改代码
+# 教学视频内容提取与总结工具 - 配置模板
+# 复制此文件为 config.yaml，填入实际的 API Key
+# config.yaml 已加入 .gitignore，不会提交到 GitHub
 
 video:
   frame_interval: 30
@@ -12,19 +12,21 @@ llm:
   timeout: 120
 
   # 模型注册表：所有可用的模型在此注册
+  # capabilities 可选值：text（文本生成）、reasoning（深度推理）、vision（多模态视觉）
   models:
     - name: doubao-seed-2-1-pro-260628
       provider: volcengine
       capabilities: [text, reasoning]
       context_length: 256000
       max_output: 16384
-    - name: deepseek-chat
+    - name: deepseek-v4-pro
       provider: deepseek
       capabilities: [text]
       context_length: 131072
       max_output: 8192
 
   # 服务商配置
+  # litellm_prefix: LiteLLM 提供商前缀，OpenAI 兼容接口统一用 "openai"
   providers:
     volcengine:
       base_url: "https://ark.cn-beijing.volces.com/api/v3"
@@ -32,10 +34,15 @@ llm:
       litellm_prefix: "openai"
     deepseek:
       base_url: "https://api.deepseek.com"
-      api_key: "sk-97bbb30918864de39761fc716191d8c3"
+      api_key: "sk-97bbb30918864de39761fc716191d8c3"  # 在 DeepSeek 平台创建
       litellm_prefix: "openai"
 
 # 任务-模型映射：每个任务指定使用的模型和 temperature
+# temperature 说明：
+#   0.0 - 精确提取（题目提取），输出最确定
+#   0.1 - ASR纠错、知识点提取，需要准确性
+#   0.2 - 解题过程整理，适度灵活
+#   0.3 - 知识点总结、思维导图，需要一定创造性
 tasks:
   asr_correction:
     model: doubao-seed-2-1-pro-260628
@@ -49,7 +56,6 @@ tasks:
   mindmap_generation:
     model: doubao-seed-2-1-pro-260628
     temperature: 0.3
-  # 以下为未来模块预留
   knowledge_summary:
     model: doubao-seed-2-1-pro-260628
     temperature: 0.3
