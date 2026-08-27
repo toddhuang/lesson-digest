@@ -62,6 +62,11 @@
 - **禁止硬编码**：model 名称、API endpoint、超时时间、阈值等必须从配置文件读取，不得写死在代码中
 - **adapter 模式**：ASR/OCR/LLM 均通过适配层隔离第三方库，底层变化不影响核心业务逻辑
 
+### 安全规范
+
+- **绝对禁止将 API Key、密钥、token 等敏感信息提交到 git**。配置文件 `config.yaml` 已在 `.gitignore` 中，只能在本地使用；模板文件 `config.example.yaml` 中 api_key 必须为空字符串。提交前必须检查 `git diff --cached` 是否包含明文密钥
+- 如果发现密钥已被提交，立即通知用户轮换密钥，并将该文件从 git 跟踪中移除（`git rm --cached`）
+
 ## PaddleOCR 2.8.1 关键限制（已验证）
 
 - **无官方手写体模型**：PaddleOCR 2.x 官方模型列表中没有手写体识别推理模型，`ch_PP-OCRv4_handwritten_rec_infer` 不存在（下载返回 NoSuchKey）。不要尝试使用或下载不存在的模型
