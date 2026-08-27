@@ -46,13 +46,12 @@ class OutputAssembler:
 
         output_files = OutputFiles(output_dir=video_output_dir)
 
-        # 1. 逐字稿（ASR纠错已在pipeline的correct_asr阶段完成，result.asr_results已是纠错后文本）
+        # 1. 逐字稿（优先输出纠错后文本，字级时间戳在缓存 JSON 中）
         transcript_path = os.path.join(video_output_dir, self.config.transcript_filename)
-        if result.asr_results:
-            self._write_transcript_with_sentences(result.asr_results, transcript_path, result, "纠错后")
+        transcript = result.corrected_transcript or result.asr_results
+        if transcript:
+            self._write_transcript(transcript.text, transcript_path, result, "纠错后")
             logger.info(f"[M12] 逐字稿已输出（纠错后）: {transcript_path}")
-        else:
-            self._write_transcript(result, transcript_path)
         output_files.transcript_path = transcript_path
 
         # 2. 知识点清单
@@ -72,29 +71,22 @@ class OutputAssembler:
         logger.info(f"[M12] 输出组装完成: {len(output_files.problem_files)}个习题文件")
         return output_files
 
-    def _write_transcript(self, result: ProcessResult, output_path: str) -> None:
-        """写逐字稿（原始未纠错）"""
-        self._write_transcript_with_sentences(result.asr_results, output_path, result, "原始未纠错")
-
-    def _write_transcript_with_sentences(self, sentences, output_path: str,
-                                           result: ProcessResult, title_suffix: str = "") -> None:
-        """写逐字稿（指定句子列表）
+    def _write_transcript(self, text: str, output_path: str,
+                          result: ProcessResult, title_suffix: str = "") -> None:
+        """写逐字稿（纯文本，字级时间戳在缓存 JSON 中供 debug）
 
         Args:
-            sentences: 句子列表
+            text: 逐字稿全文
             output_path: 输出路径
             result: 处理结果（用于视频信息）
-            title_suffix: 标题后缀（如"DeepSeek云端纠错"）
+            title_suffix: 标题后缀（如"纠错后"）
         """
         lines = [f"# 逐字稿（{title_suffix}）\n"]
         lines.append(f"> 视频：{os.path.basename(result.video_path)}")
         if result.video_info:
             lines.append(f"> 时长：{format_timestamp(result.video_info.duration, 'hh:mm:ss')}")
         lines.append("")
-
-        for sent in sentences:
-            ts = format_timestamp(sent.start_time, self.config.timestamp_format)
-            lines.append(f"[{ts}] {sent.text}")
+        lines.append(text)
 
         save_text("\n".join(lines), output_path)
 

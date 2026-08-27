@@ -235,7 +235,7 @@ class Pipeline:
         )
 
     def _stage_correct_asr(self, context: PipelineContext):
-        """ASR纠错（纠错后替换context.asr_results，后续所有模块基于纠错后文本）"""
+        """ASR纠错（纠错后存入 context.corrected_transcript，后续模块基于纠错后文本）"""
         if not context.asr_results:
             logger.warning("[Pipeline] ASR结果为空，跳过纠错")
             return
@@ -243,15 +243,15 @@ class Pipeline:
         try:
             from utils.asr_corrector import ASRCorrector
             corrector = ASRCorrector(self.llm_client.get_session("asr_correction"))
-            corrected = corrector.correct(context.asr_results)
-            context.asr_results = corrected
+            context.corrected_transcript = corrector.correct(context.asr_results)
             logger.info("[Pipeline] ASR纠错完成")
         except LLMError as e:
             logger.error(f"[Pipeline] ASR纠错失败 ({type(e).__name__})，使用原始逐字稿: {e}")
 
     def _stage_merge_text(self, context: PipelineContext):
-        """ASR文本整理（只处理ASR，OCR不混入全文本）"""
-        context.full_text = self.text_merger.merge(context.asr_results)
+        """ASR文本整理（优先使用纠错后文本，OCR不混入全文本）"""
+        transcript = context.corrected_transcript or context.asr_results
+        context.full_text = self.text_merger.merge(transcript)
 
     def _stage_extract_knowledge(self, context: PipelineContext):
         """知识点提取"""
@@ -292,7 +292,8 @@ class Pipeline:
         return ProcessResult(
             video_path=context.video_path,
             video_info=context.video_info,
-            asr_results=context.asr_results or [],
+            asr_results=context.asr_results,
+            corrected_transcript=context.corrected_transcript,
             ocr_results=context.ocr_results or [],
             full_text=context.full_text or "",
             knowledge_points=context.knowledge_points or [],

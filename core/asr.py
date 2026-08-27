@@ -5,10 +5,9 @@ M4 语音识别模块
 """
 
 import os
-import json
-from typing import List
+import hashlib
 
-from utils.models import Sentence
+from utils.models import RawTranscript
 from utils.file_utils import ensure_dir, save_json, load_json
 from utils.logger import setup_logger
 from adapters.asr import create_asr_adapter, ASRAdapter
@@ -30,7 +29,7 @@ class ASRRecognizer:
             self._adapter = create_asr_adapter(self.adapter_type, self.config)
         return self._adapter
 
-    def recognize(self, audio_path: str, use_cache: bool = True) -> List[Sentence]:
+    def recognize(self, audio_path: str, use_cache: bool = True) -> RawTranscript:
         """语音识别
 
         Args:
@@ -38,27 +37,26 @@ class ASRRecognizer:
             use_cache: 是否使用缓存
 
         Returns:
-            Sentence 列表
+            RawTranscript，包含完整文本和字级时间戳
         """
         logger.info(f"[M4] 语音识别: {audio_path}")
 
         # 缓存检查（使用文件绝对路径的md5，避免不同视频的audio.wav冲突）
-        import hashlib
         cache_key = hashlib.md5(os.path.abspath(audio_path).encode()).hexdigest()[:16]
         cache_path = os.path.join(self.cache_dir, f"{cache_key}.json")
         if use_cache and os.path.exists(cache_path):
             logger.info(f"[M4] 命中缓存: {cache_path}")
             data = load_json(cache_path)
-            return [Sentence(**s) for s in data]
+            return RawTranscript.from_dict(data)
 
         # 调用适配层
         adapter = self._get_adapter()
-        sentences = adapter.transcribe(audio_path)
+        transcript = adapter.transcribe(audio_path)
 
         # 写入缓存
         if use_cache:
             ensure_dir(self.cache_dir)
-            save_json([s.__dict__ for s in sentences], cache_path)
+            save_json(transcript.to_dict(), cache_path)
 
-        logger.info(f"[M4] 语音识别完成: {len(sentences)}句")
-        return sentences
+        logger.info(f"[M4] 语音识别完成: {len(transcript.text)}字")
+        return transcript

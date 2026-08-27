@@ -5,7 +5,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 
 # === 一、视频与音频相关 ===
@@ -52,11 +52,107 @@ class FrameInfo:
 
 @dataclass
 class Sentence:
-    """ASR 语音识别结果（单句）"""
+    """ASR 语音识别结果（单句）- 旧结构，逐步废弃"""
     start_time: float = 0.0
     end_time: float = 0.0
     text: str = ""
     confidence: float = 1.0
+
+
+@dataclass
+class CharTime:
+    """单个字符的时间戳（毫秒）"""
+    start_ms: int = 0
+    end_ms: int = 0
+
+    def to_dict(self) -> Dict[str, int]:
+        return {"start_ms": self.start_ms, "end_ms": self.end_ms}
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, int]) -> "CharTime":
+        return cls(start_ms=d["start_ms"], end_ms=d["end_ms"])
+
+
+@dataclass
+class RawTranscript:
+    """ASR 原始输出，时间戳的唯一权威来源。
+
+    text 与 char_timestamps 等长，标点/空格等无语音的字符对应位置为 None。
+    """
+    text: str = ""
+    char_timestamps: List[Optional[CharTime]] = field(default_factory=list)
+
+    def get_time_range(self, start_idx: int, end_idx: int) -> tuple:
+        """返回 [start_idx, end_idx) 字符区间的起止时间（秒）。
+
+        跳过 None（标点等无时间戳的字符），取区间内第一个和最后一个
+        有时间戳的字符。
+
+        Returns:
+            (start_sec, end_sec) 元组；区间内无有效时间戳时返回 (0.0, 0.0)
+        """
+        start_ms = None
+        end_ms = None
+        for i in range(max(0, start_idx), min(end_idx, len(self.char_timestamps))):
+            ct = self.char_timestamps[i]
+            if ct is not None:
+                if start_ms is None:
+                    start_ms = ct.start_ms
+                end_ms = ct.end_ms
+        if start_ms is None or end_ms is None:
+            return (0.0, 0.0)
+        return (start_ms / 1000.0, end_ms / 1000.0)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "text": self.text,
+            "char_timestamps": [
+                ct.to_dict() if ct is not None else None
+                for ct in self.char_timestamps
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "RawTranscript":
+        return cls(
+            text=d["text"],
+            char_timestamps=[
+                CharTime.from_dict(ct) if ct is not None else None
+                for ct in d.get("char_timestamps", [])
+            ],
+        )
+
+
+@dataclass
+class AlignedTranscript:
+    """纠错后文本 + 与原始文本的对齐映射。
+
+    text 与 raw_align 等长。raw_align[i] 指向 RawTranscript.text 的字符索引，
+    None 表示 LLM 新增字（标点、修正字），无直接时间戳。
+    """
+    text: str = ""
+    raw_align: List[Optional[int]] = field(default_factory=list)
+    raw: Optional[RawTranscript] = None
+
+    def get_time_range(self, start_idx: int, end_idx: int) -> tuple:
+        """返回 [start_idx, end_idx) 字符区间的起止时间（秒）。
+
+        沿 raw_align 映射回溯到 RawTranscript 取时间戳，
+        跳过 None（LLM 新增字）。
+        """
+        if self.raw is None:
+            return (0.0, 0.0)
+        raw_start = None
+        raw_end = None
+        for i in range(max(0, start_idx), min(end_idx, len(self.raw_align))):
+            raw_idx = self.raw_align[i]
+            if raw_idx is not None:
+                if raw_start is None:
+                    raw_start = raw_idx
+                raw_end = raw_idx
+        if raw_start is None or raw_end is None:
+            return (0.0, 0.0)
+        return self.raw.get_time_range(raw_start, raw_end + 1)
 
 
 @dataclass
@@ -145,7 +241,8 @@ class ProcessResult:
     """完整处理结果，由 M13 主流程编排模块返回"""
     video_path: str = ""
     video_info: Optional[VideoInfo] = None
-    asr_results: List[Sentence] = field(default_factory=list)
+    asr_results: Optional[RawTranscript] = None
+    corrected_transcript: Optional[AlignedTranscript] = None
     ocr_results: List[OCRFrameResult] = field(default_factory=list)
     full_text: str = ""
     knowledge_points: List[KnowledgePoint] = field(default_factory=list)
@@ -172,7 +269,8 @@ class PipelineContext:
     audio_path: Optional[str] = None
     frame_paths: Optional[List[str]] = None
     frame_timestamps: Optional[List[float]] = None
-    asr_results: Optional[List[Sentence]] = None
+    asr_results: Optional[RawTranscript] = None
+    corrected_transcript: Optional[AlignedTranscript] = None
     ocr_results: Optional[List[OCRFrameResult]] = None
     full_text: Optional[str] = None
     knowledge_points: Optional[List[KnowledgePoint]] = None

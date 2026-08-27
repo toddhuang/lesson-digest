@@ -4,9 +4,8 @@ ASR 适配器抽象基类
 """
 
 from abc import ABC, abstractmethod
-from typing import List
 
-from utils.models import Sentence
+from utils.models import RawTranscript
 
 
 class ASRAdapter(ABC):
@@ -23,13 +22,14 @@ class ASRAdapter(ABC):
         pass
 
     @abstractmethod
-    def transcribe(self, audio_path: str) -> List[Sentence]:
-        """语音识别，返回带时间戳的句子列表
+    def transcribe(self, audio_path: str) -> RawTranscript:
+        """语音识别，返回完整文本和字级时间戳
 
         Args:
             audio_path: 音频文件路径
 
         Returns:
-            Sentence 列表
+            RawTranscript，text 与 char_timestamps 等长，
+            标点等无语音字符对应位置为 None
         """
         pass

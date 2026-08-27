@@ -1,14 +1,21 @@
 """
 FunASR 适配器
 使用 paraformer-zh + fsmn-vad + ct-punc 模型组合。
+返回完整文本和字级时间戳，不做句子切分。
 """
 
-import re
 import subprocess
-from typing import List
+from typing import List, Optional
 
-from utils.models import Sentence
+from utils.models import RawTranscript, CharTime
 from adapters.asr.base import ASRAdapter
+
+# 中英文标点和空白字符，这些字符在 ct-punc 添加后没有对应语音时间戳
+_PUNCTUATION = set(
+    "，。！？、；：""''（）【】《》〈〉「」『』…—·"
+    ",.!?;:\"'()[]{}<>-\n\r\t "
+    "~`@#$%^&*_+=|\\/"
+)
 
 
 class FunASRAdapter(ASRAdapter):
@@ -52,14 +59,15 @@ class FunASRAdapter(ASRAdapter):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-    def transcribe(self, audio_path: str) -> List[Sentence]:
-        """语音识别，返回带时间戳的句子列表
+    def transcribe(self, audio_path: str) -> RawTranscript:
+        """语音识别，返回完整文本和字级时间戳
 
         Args:
             audio_path: 音频文件路径（WAV 格式，16kHz 单声道）
 
         Returns:
-            Sentence 列表
+            RawTranscript，text 与 char_timestamps 等长，
+            标点/空白字符对应位置为 None
         """
         if self._model is None:
             raise RuntimeError("FunASR 模型未加载，请先调用 load_model()")
@@ -75,103 +83,79 @@ class FunASRAdapter(ASRAdapter):
         )
 
         if not res:
-            return []
+            return RawTranscript(text="", char_timestamps=[])
 
         result = res[0]
         text = result.get("text", "")
         timestamp = result.get("timestamp", [])
 
-        sentences = self._split_to_sentences(text, timestamp, audio_path)
+        char_timestamps = self._align_timestamps(text, timestamp, logger)
 
-        logger.info(f"FunASR 识别完成: {len(sentences)}句")
-        return sentences
+        logger.info(
+            f"FunASR 识别完成: {len(text)}字, "
+            f"{sum(1 for ct in char_timestamps if ct is not None)}字有时间戳"
+        )
+        return RawTranscript(text=text, char_timestamps=char_timestamps)
 
-    def _split_to_sentences(self, text: str, timestamp: list, audio_path: str) -> List[Sentence]:
-        """将识别文本按标点拆分为句子，并估算时间戳
+    def _align_timestamps(
+        self,
+        text: str,
+        timestamp: List[List[int]],
+        logger,
+    ) -> List[Optional[CharTime]]:
+        """将 FunASR 返回的时间戳数组与文本字符对齐
+
+        ct-punc 添加的标点没有对应语音，timestamp 数组只包含有语音的字符。
+        本方法按顺序将时间戳分配给非标点字符，标点位置设为 None。
+
+        若 timestamp 长度与 text 长度相等（某些 FunASR 版本可能给标点也
+        填了时间戳），则直接使用，但 [0,0] 的条目标记为 None。
 
         Args:
-            text: 识别文本（带标点）
-            timestamp: 字级时间戳列表 [[start_ms, end_ms], ...]
-            audio_path: 音频文件路径（用于获取总时长）
+            text: 识别文本（含标点）
+            timestamp: FunASR 返回的 [[start_ms, end_ms], ...]
+            logger: 日志器
 
         Returns:
-            Sentence 列表
+            与 text 等长的列表，每个元素是 CharTime 或 None
         """
-        duration = self._get_audio_duration(audio_path)
+        if not timestamp:
+            return [None] * len(text)
 
-        sentence_endings = r'[。？！]'
-        parts = re.split(f'({sentence_endings})', text)
+        # 情况1：时间戳数量与文本长度相等，直接使用
+        if len(timestamp) == len(text):
+            result = []
+            for i, (start_ms, end_ms) in enumerate(timestamp):
+                if start_ms == 0 and end_ms == 0 and text[i] in _PUNCTUATION:
+                    result.append(None)
+                else:
+                    result.append(CharTime(start_ms=int(start_ms), end_ms=int(end_ms)))
+            return result
 
-        sentences = []
-        current_text = ""
-        char_index = 0
-
-        for part in parts:
-            if not part:
-                continue
-            if re.match(sentence_endings, part):
-                current_text += part
-                start_time, end_time = self._get_sentence_timestamp(
-                    char_index, char_index + len(current_text), timestamp, duration
-                )
-                sentences.append(Sentence(
-                    start_time=start_time,
-                    end_time=end_time,
-                    text=current_text.strip(),
-                    confidence=0.9,
-                ))
-                char_index += len(current_text)
-                current_text = ""
+        # 情况2：时间戳数量少于文本长度（标点无时间戳），按顺序分配给非标点字符
+        result: List[Optional[CharTime]] = []
+        ts_idx = 0
+        for char in text:
+            if char in _PUNCTUATION:
+                result.append(None)
             else:
-                current_text += part
+                if ts_idx < len(timestamp):
+                    start_ms, end_ms = timestamp[ts_idx]
+                    result.append(CharTime(start_ms=int(start_ms), end_ms=int(end_ms)))
+                    ts_idx += 1
+                else:
+                    # 时间戳不足，剩余非标点字符标记为 None
+                    result.append(None)
+                    logger.warning(
+                        f"FunASR 时间戳数量不足: 已分配 {ts_idx} 个，"
+                        f"文本还有非标点字符 '{char}' 无时间戳"
+                    )
 
-        if current_text.strip():
-            start_time, end_time = self._get_sentence_timestamp(
-                char_index, char_index + len(current_text), timestamp, duration
+        if ts_idx < len(timestamp):
+            logger.warning(
+                f"FunASR 时间戳数量多于非标点字符: "
+                f"文本 {len(text)} 字，时间戳 {len(timestamp)} 个，"
+                f"已分配 {ts_idx} 个，剩余 {len(timestamp) - ts_idx} 个未使用"
             )
-            sentences.append(Sentence(
-                start_time=start_time,
-                end_time=end_time,
-                text=current_text.strip(),
-                confidence=0.9,
-            ))
 
-        return sentences
-
-    def _get_audio_duration(self, audio_path: str) -> float:
-        """获取音频总时长（秒）"""
-        try:
-            cmd = ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-                   "-of", "default=noprint_wrappers=1:nokey=1", audio_path]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if result.returncode == 0 and result.stdout.strip():
-                return float(result.stdout.strip())
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
-            pass
-        return 0.0
-
-    def _get_sentence_timestamp(self, start_char: int, end_char: int,
-                                  timestamp: list, duration: float) -> tuple:
-        """根据字级时间戳估算句子的时间戳范围
-
-        Args:
-            start_char: 句子起始字符索引
-            end_char: 句子结束字符索引
-            timestamp: 字级时间戳列表 [[start_ms, end_ms], ...]
-            duration: 音频总时长（秒）
-
-        Returns:
-            (start_time, end_time) 元组（秒）
-        """
-        if timestamp and start_char < len(timestamp):
-            start_ms = timestamp[start_char][0] if start_char < len(timestamp) else 0
-            end_idx = min(end_char - 1, len(timestamp) - 1)
-            end_ms = timestamp[end_idx][1] if end_idx >= 0 else 0
-            return start_ms / 1000.0, end_ms / 1000.0
-        else:
-            if duration > 0 and timestamp:
-                total_chars = len(timestamp)
-                start_time = (start_char / total_chars) * duration if total_chars > 0 else 0
-                end_time = (end_char / total_chars) * duration if total_chars > 0 else duration
-                return start_time, end_time
-            return 0.0, 0.0
+        return result
