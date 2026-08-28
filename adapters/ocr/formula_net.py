@@ -1,6 +1,6 @@
 """
 PP-FormulaNet 公式识别适配器
-使用 PaddleOCR 公式识别产线（版面检测 + PP-FormulaNet_plus-M），
+使用 PaddleOCR 3.x 公式识别产线（版面检测 + PP-FormulaNet_plus-M），
 输出印刷体公式 LaTeX 和版面分类。
 R-008 定案：与 PP-OCRv6 并行运行，分别识别公式和文字。
 """
@@ -12,7 +12,7 @@ from adapters.ocr.base import OCRAdapter
 
 
 class FormulaNetAdapter(OCRAdapter):
-    """PP-FormulaNet 公式识别适配器"""
+    """PP-FormulaNet 公式识别适配器（PaddleOCR 3.x）"""
 
     def __init__(self):
         self._pipeline = None
@@ -22,21 +22,19 @@ class FormulaNetAdapter(OCRAdapter):
         """加载 PP-FormulaNet 产线模型
 
         Args:
-            config: 配置字典，支持 formula_model_name, device 等参数
+            config: 配置字典，支持 formula_model_name 等参数
         """
         self._config = config
         model_name = config.get("formula_model_name", "PP-FormulaNet_plus-M")
-        device = config.get("device", "gpu:0")
 
         from paddleocr import FormulaRecognitionPipeline
         from utils.logger import setup_logger
         logger = setup_logger("FormulaNet")
 
-        logger.info(f"加载 PP-FormulaNet 产线: model={model_name}, device={device}")
+        logger.info(f"加载 PP-FormulaNet 产线: model={model_name}")
 
         self._pipeline = FormulaRecognitionPipeline(
             formula_recognition_model_name=model_name,
-            device=device,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
         )
@@ -69,7 +67,7 @@ class FormulaNetAdapter(OCRAdapter):
         if not result:
             return []
 
-        res = result[0]
+        res = result[0]  # dict-like 对象
         img_w, img_h = self._get_image_size(image_path)
 
         ocr_results: List[OCRResult] = []
@@ -97,32 +95,28 @@ class FormulaNetAdapter(OCRAdapter):
 
         # 公式识别结果
         for item in res.get("formula_res_list", []):
-            polys = item.get("dt_polys", [])
-            flat = None
-            try:
-                if len(polys) and hasattr(polys[0], "__len__"):
-                    flat = list(polys[0])
-                elif len(polys):
-                    flat = list(polys)
-            except TypeError:
-                flat = None
-
             latex = item.get("rec_formula", "")
-            polys_score = float(item.get("rec_score", 0.0))
+            rec_score = float(item.get("rec_score", 0.0))
 
+            # dt_polys 可能是 numpy array 或 list
+            polys = item.get("dt_polys", [])
             box_coords = None
-            if flat and len(flat) >= 4:
-                xs = [p[0] for p in flat]
-                ys = [p[1] for p in flat]
-                x1 = min(xs) / img_w if img_w > 0 else 0
-                y1 = min(ys) / img_h if img_h > 0 else 0
-                x2 = max(xs) / img_w if img_w > 0 else 1
-                y2 = max(ys) / img_h if img_h > 0 else 1
-                box_coords = [x1, y1, x2, y2]
+            if polys is not None and len(polys) > 0:
+                try:
+                    poly = polys[0] if hasattr(polys, '__len__') else polys
+                    xs = [p[0] for p in poly]
+                    ys = [p[1] for p in poly]
+                    x1 = min(xs) / img_w if img_w > 0 else 0
+                    y1 = min(ys) / img_h if img_h > 0 else 0
+                    x2 = max(xs) / img_w if img_w > 0 else 1
+                    y2 = max(ys) / img_h if img_h > 0 else 1
+                    box_coords = [x1, y1, x2, y2]
+                except (IndexError, TypeError, ValueError):
+                    box_coords = None
 
             ocr_results.append(OCRResult(
                 text=latex,
-                confidence=polys_score,
+                confidence=rec_score,
                 bounding_box=box_coords or [],
                 block_type="formula",
                 latex=latex,

@@ -1,6 +1,6 @@
 """
 PaddleOCR 适配器
-使用 PaddleOCR 检测+识别模型（支持 PP-OCRv4 / PP-OCRv6）。
+使用 PaddleOCR 3.x 检测+识别模型（PP-OCRv6）。
 R-008 定案：PP-OCRv6 作为文字识别引擎，与 FormulaNet 并行运行。
 """
 
@@ -12,34 +12,36 @@ from adapters.ocr.base import OCRAdapter
 
 
 class PaddleOCRAdapter(OCRAdapter):
-    """PaddleOCR 适配器，使用 PaddleOCR 检测+识别模型"""
+    """PaddleOCR 3.x 适配器，使用 PP-OCRv6 检测+识别模型"""
 
     def __init__(self):
         self._ocr = None
         self._config = {}
 
     def load_model(self, config: dict) -> None:
-        """加载 PaddleOCR 模型
+        """加载 PaddleOCR 3.x 模型
 
         Args:
-            config: 配置字典，支持 language, use_angle_cls, use_gpu 等参数
+            config: 配置字典，支持 text_det_model, text_rec_model 等参数
         """
         self._config = config
-        language = config.get("language", "ch")
-        use_angle_cls = config.get("use_angle_cls", True)
+        det_model = config.get("text_detection_model_name", "PP-OCRv6_small_det")
+        rec_model = config.get("text_recognition_model_name", "PP-OCRv6_small_rec")
 
         from paddleocr import PaddleOCR
         from utils.logger import setup_logger
         logger = setup_logger("PaddleOCR")
 
-        logger.info(f"加载 PaddleOCR 模型: language={language}, use_angle_cls={use_angle_cls}")
+        logger.info(f"加载 PaddleOCR 3.x: det={det_model}, rec={rec_model}")
 
         self._ocr = PaddleOCR(
-            use_angle_cls=use_angle_cls,
-            lang=language,
-            use_gpu=True,
+            text_detection_model_name=det_model,
+            text_recognition_model_name=rec_model,
+            use_textline_orientation=False,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
         )
-        logger.info("PaddleOCR 模型加载完成")
+        logger.info("PaddleOCR 3.x 模型加载完成")
 
     def unload_model(self) -> None:
         """卸载模型，释放 GPU 显存"""
@@ -56,7 +58,7 @@ class PaddleOCRAdapter(OCRAdapter):
             image_path: 图片文件路径
 
         Returns:
-            OCRResult 列表（block_type=text 或 handwritten）
+            OCRResult 列表（block_type=text）
         """
         if self._ocr is None:
             raise RuntimeError("PaddleOCR 模型未加载，请先调用 load_model()")
@@ -66,29 +68,39 @@ class PaddleOCRAdapter(OCRAdapter):
 
         img_width, img_height = self._get_image_size(image_path)
 
-        result = self._ocr.ocr(image_path, cls=True)
+        result = self._ocr.predict(image_path)
 
-        if not result or not result[0]:
+        if not result:
             return []
 
         ocr_results = []
-        for line in result[0]:
-            box = line[0]
-            text, confidence = line[1]
+        for item in result:
+            # PaddleOCR 3.x 返回 dict-like 对象
+            texts = item.get("rec_texts", [])
+            scores = item.get("rec_scores", [])
+            polys = item.get("dt_polys", [])
 
-            xs = [p[0] for p in box]
-            ys = [p[1] for p in box]
-            x1 = min(xs) / img_width if img_width > 0 else 0
-            y1 = min(ys) / img_height if img_height > 0 else 0
-            x2 = max(xs) / img_width if img_width > 0 else 1
-            y2 = max(ys) / img_height if img_height > 0 else 1
+            for i, text in enumerate(texts):
+                confidence = float(scores[i]) if i < len(scores) else 0.0
 
-            ocr_results.append(OCRResult(
-                text=text,
-                confidence=float(confidence),
-                bounding_box=[x1, y1, x2, y2],
-                block_type="text",  # PP-OCRv 不区分印刷/手写，默认为 text
-            ))
+                # bounding box
+                bounding_box = []
+                if i < len(polys):
+                    poly = polys[i]
+                    xs = [p[0] for p in poly]
+                    ys = [p[1] for p in poly]
+                    x1 = min(xs) / img_width if img_width > 0 else 0
+                    y1 = min(ys) / img_height if img_height > 0 else 0
+                    x2 = max(xs) / img_width if img_width > 0 else 1
+                    y2 = max(ys) / img_height if img_height > 0 else 1
+                    bounding_box = [x1, y1, x2, y2]
+
+                ocr_results.append(OCRResult(
+                    text=text,
+                    confidence=confidence,
+                    bounding_box=bounding_box,
+                    block_type="text",
+                ))
 
         logger.info(f"PaddleOCR 识别完成: {len(ocr_results)}条文本")
         return ocr_results

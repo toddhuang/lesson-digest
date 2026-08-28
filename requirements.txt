@@ -1,37 +1,41 @@
 # 教学视频内容提取与总结工具 - Python 依赖
-# 验证通过的版本组合（2026.08.23，RTX 3080 Windows 11）
-# 安装顺序请参考 Document/环境文档/开发环境安装文档.md
+# 统一环境（PaddleOCR 3.x + PaddlePaddle 3.x + FunASR + LiteLLM）
+# 验证通过的版本组合（2026.08.28，RTX 3080 Windows 11）
+# Python 3.10（PaddlePaddle 3.2.2 推荐）
 
 # === 核心配置 ===
-pyyaml>=6.0
+PyYAML>=6.0
 
 # === PyTorch（FunASR 依赖，GPU 版 cu126）===
-# 必须用 --index-url https://download.pytorch.org/whl/cu126 安装
+# 安装：pip install torch==2.13.0+cu126 torchaudio==2.11.0+cu126 --index-url https://download.pytorch.org/whl/cu126
 torch==2.13.0+cu126
+torchaudio==2.11.0+cu126
 
-# === PaddlePaddle（PaddleOCR 依赖，Windows 最高版）===
-# 必须用 -f https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html 安装
-paddlepaddle-gpu==2.6.1.post120
+# === PaddlePaddle 3.x（PaddleOCR 3.x 依赖，GPU 版 CUDA 12.6）===
+# 安装：pip install paddlepaddle-gpu==3.2.2 -f https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html
+paddlepaddle-gpu==3.2.2
 
-# === PaddleOCR（文字识别，固定 2.8.1，3.x 不兼容 Paddle 2.6）===
-paddleocr==2.8.1
+# === PaddleOCR 3.x（文字识别 + 公式识别，统一引擎）===
+# PP-OCRv6 文字 + PP-FormulaNet 公式，单进程并行
+# 安装：pip install paddleocr==3.7.0 paddlex==3.7.2
+paddleocr==3.7.0
+paddlex==3.7.2
 
-# === OpenCV（PaddleOCR 依赖，用 contrib 版，不要装普通版）===
+# === OpenCV（PaddleOCR 依赖，用 contrib 版）===
 opencv-contrib-python==4.10.0.84
 
-# === numpy（PaddleOCR 2.8.1 不兼容 2.x，必须 <2.0）===
-numpy==1.26.4
+# === numpy（PaddlePaddle 3.x 支持 2.x）===
+numpy>=2.0
 
-# === stringzilla（PaddleOCR 2.x 依赖，用预编译 wheel 避免 VC++ 编译）===
-# 安装命令：pip install stringzilla --only-binary :all:
-stringzilla==5.1.1
+# === PIL（图像处理）===
+pillow>=10.0
 
 # === FunASR（语音识别）===
 funasr==1.4.2
-modelscope>=1.0
 
 # === LiteLLM（统一多模型调用：豆包/DeepSeek 等 OpenAI 兼容 API）===
 litellm>=1.98.0
 
-# === 图像处理 ===
-pillow>=10.0
+# === 其他 ===
+tqdm>=4.60
+psutil>=5.9
