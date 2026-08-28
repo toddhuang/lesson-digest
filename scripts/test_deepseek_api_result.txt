@@ -1,7 +1,7 @@
 ======================================================================
   DeepSeek API 验证报告
   模型: deepseek-v4-pro
-  时间: 2026-08-27 11:52:01
+  时间: 2026-08-27 12:08:34
 ======================================================================
 上下文长度: 131072
 最大输出: 8192
@@ -11,40 +11,34 @@
 ======================================================================
 模型: openai/deepseek-v4-pro
 base_url: https://api.deepseek.com
-耗时: 5.7s
+耗时: 3.6s
 finish_reason: stop
 content:
 A∩B = {2, 3}
 
 A∪B = {1, 2, 3, 4}
-usage: prompt=112, completion=95, total=207
+usage: prompt=112, completion=88, total=200
 
-[发现] reasoning_content 字段存在，长度=94
-reasoning_content 前300字: 我们需要回答中文题目。需要求 A∩B 和 A∪B。A={1,2,3}, B={2,3,4}。交集 {2,3}，并集 {1,2,3,4}。简单。需要注意集合元素无序，但通常升序。最终用中文。
+[发现] reasoning_content 字段存在，长度=89
+reasoning_content 前300字: 我们需要回答中文题。已知集合 A={1,2,3}, B={2,3,4}，求交集和并集。直接回答 A∩B={2,3}, A∪B={1,2,3,4}。需要注意集合元素无序。可以简洁。
 message 其他属性: ['construct', 'copy', 'dict', 'from_orm', 'function_call', 'get', 'json', 'model_computed_fields', 'model_config', 'model_construct', 'model_copy', 'model_dump', 'model_dump_json', 'model_extra', 'model_fields', 'model_fields_set', 'model_json_schema', 'model_parametrized_name', 'model_post_init', 'model_rebuild', 'model_validate', 'model_validate_json', 'model_validate_strings', 'parse_file', 'parse_obj', 'parse_raw', 'provider_specific_fields', 'reasoning_content', 'schema', 'schema_json', 'to_dict', 'to_json', 'tool_calls', 'update_forward_refs', 'validate']
 
 ======================================================================
   测试2: LiteLLM 流式调用
 ======================================================================
-耗时: 2.6s
+耗时: 2.8s
 finish_reason: stop
-content 长度: 85
+content 长度: 28
 content 前300字:
-已知 \(A=\{1,2,3\}\)，\(B=\{2,3,4\}\)。
+A∩B = {2,3}
 
-\[
-A\cap B=\{2,3\}
-\]
+A∪B = {1,2,3,4}
 
-\[
-A\cup B=\{1,2,3,4\}
-\]
+reasoning_content 长度: 73
+reasoning_content 前300字: 我们需要回答中文数学题。需要求交集并集。注意集合 A={1,2,3}, B={2,3,4}。交集 {2,3}，并集 {1,2,3,4}。可以简洁。
 
-reasoning_content 长度: 66
-reasoning_content 前300字: 我们需要回答中文题。需要求交集并集。A={1,2,3}, B={2,3,4}。交集 {2,3}，并集 {1,2,3,4}。直接回答。
-
-delta 属性: {'dict', 'model_fields', 'model_validate', 'model_copy', 'model_post_init', 'construct', 'parse_raw', 'model_computed_fields', 'schema_json', 'model_construct', 'get', 'model_validate_strings', 'model_fields_set', 'model_parametrized_name', 'update_forward_refs', 'provider_specific_fields', 'from_orm', 'parse_file', 'to_dict', 'to_json', 'json', 'model_validate_json', 'reasoning_content', 'model_rebuild', 'validate', 'copy', 'parse_obj', 'model_config', 'model_json_schema', 'schema', 'model_dump_json', 'model_extra'}
-usage: prompt=39, completion=61, total=100
+delta 属性: {'get', 'model_validate_strings', 'model_fields_set', 'update_forward_refs', 'copy', 'model_validate_json', 'schema', 'model_construct', 'model_extra', 'provider_specific_fields', 'dict', 'model_validate', 'construct', 'model_config', 'parse_obj', 'reasoning_content', 'from_orm', 'parse_file', 'schema_json', 'json', 'to_dict', 'validate', 'parse_raw', 'model_fields', 'model_json_schema', 'model_copy', 'model_post_init', 'model_parametrized_name', 'model_rebuild', 'model_dump_json', 'to_json', 'model_computed_fields'}
+usage: prompt=39, completion=24, total=63
 
 ======================================================================
   测试3: 异常处理 - 无效模型名

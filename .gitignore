@@ -12,6 +12,7 @@ build/
 venv/
 .venv/
 env/
+venv_paddle3/
 
 # 运行时产物
 cache/
