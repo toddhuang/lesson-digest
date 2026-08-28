@@ -69,12 +69,28 @@ asr:
   channels: 1
   model_name: "paraformer-zh"
 
+frame_dedup:
+  algorithm: dhash
+  threshold: 0.02
+  interval_sec: 1.0
+
 ocr:
+  text_adapter_type: paddleocr
+  formula_adapter_type: formula_net
+  language: "ch"
+  use_angle_cls: true
+  enable_color_filter: false  # P2 可选，PPT 可能用彩色字体分章节
+  black_threshold: 120
+
+text_ocr:
   adapter_type: paddleocr
   language: "ch"
   use_angle_cls: true
-  enable_color_filter: true
-  black_threshold: 120
+
+formula_ocr:
+  adapter_type: formula_net
+  formula_model_name: "PP-FormulaNet_plus-M"
+  device: "gpu:0"
 
 output:
   transcript_filename: "01_逐字稿.md"

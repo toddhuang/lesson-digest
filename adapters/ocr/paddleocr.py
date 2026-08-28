@@ -1,6 +1,7 @@
 """
 PaddleOCR 适配器
-使用 PaddleOCR 检测+识别模型。
+使用 PaddleOCR 检测+识别模型（支持 PP-OCRv4 / PP-OCRv6）。
+R-008 定案：PP-OCRv6 作为文字识别引擎，与 FormulaNet 并行运行。
 """
 
 import subprocess
@@ -55,7 +56,7 @@ class PaddleOCRAdapter(OCRAdapter):
             image_path: 图片文件路径
 
         Returns:
-            OCRResult 列表
+            OCRResult 列表（block_type=text 或 handwritten）
         """
         if self._ocr is None:
             raise RuntimeError("PaddleOCR 模型未加载，请先调用 load_model()")
@@ -86,6 +87,7 @@ class PaddleOCRAdapter(OCRAdapter):
                 text=text,
                 confidence=float(confidence),
                 bounding_box=[x1, y1, x2, y2],
+                block_type="text",  # PP-OCRv 不区分印刷/手写，默认为 text
             ))
 
         logger.info(f"PaddleOCR 识别完成: {len(ocr_results)}条文本")

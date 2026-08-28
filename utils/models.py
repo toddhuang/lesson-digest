@@ -157,10 +157,17 @@ class AlignedTranscript:
 
 @dataclass
 class OCRResult:
-    """OCR 文字识别结果（单条文本）"""
+    """OCR 识别结果（单条文本或公式）
+
+    R-008 扩展：新增 block_type / latex 字段，支持两引擎并行输出。
+    - text + block_type=text/handwritten：PP-OCRv6 识别的文字行
+    - text + block_type=formula + latex：PP-FormulaNet 识别的公式
+    """
     text: str = ""
     confidence: float = 1.0
     bounding_box: List[float] = field(default_factory=list)  # [x1, y1, x2, y2] 归一化 0-1
+    block_type: str = "text"  # text / handwritten / formula / title / image
+    latex: str = ""  # 公式 LaTeX（仅 block_type=formula 时有效）
 
 
 @dataclass

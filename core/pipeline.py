@@ -77,8 +77,9 @@ class Pipeline:
             cache_dir=os.path.join(config.paths.cache_dir, "asr"),
         )
         self.ocr_recognizer = OCRRecognizer(
-            adapter_type=config.ocr.adapter_type,
-            config=config.ocr,
+            text_adapter_type=config.ocr.text_adapter_type,
+            formula_adapter_type=config.ocr.formula_adapter_type,
+            config=config,
             cache_dir=os.path.join(config.paths.cache_dir, "ocr"),
         )
         self.text_merger = TextMerger()
