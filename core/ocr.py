@@ -8,6 +8,7 @@ R-008 定案：两引擎并行 + LLM 补全；颜色过滤降级 P2 可选，MVP
 """
 
 import os
+from dataclasses import asdict, is_dataclass
 from typing import List
 
 from utils.models import OCRFrameResult, OCRResult
@@ -16,6 +17,18 @@ from utils.logger import setup_logger
 from adapters.ocr import create_ocr_adapter, OCRAdapter
 
 logger = setup_logger("M5_ocr")
+
+
+def _config_to_dict(config) -> dict:
+    """将配置对象统一转换为 dict（适配器内部用 config.get() 访问）"""
+    if config is None:
+        return {}
+    if isinstance(config, dict):
+        return config
+    if is_dataclass(config):
+        return asdict(config)
+    # 普通对象：提取公开属性
+    return {k: v for k, v in vars(config).items() if not k.startswith("_")}
 
 
 class OCRRecognizer:
@@ -40,13 +53,13 @@ class OCRRecognizer:
         self._formula_adapter: OCRAdapter = None
 
         # 颜色过滤：MVP 默认关闭，P2 可选
-        if hasattr(config, 'enable_color_filter'):
-            self.enable_color_filter = config.enable_color_filter
-            self.black_threshold = getattr(config, 'black_threshold', 80)
-        elif isinstance(config, dict):
+        if isinstance(config, dict):
             ocr_config = config.get("ocr", {})
             self.enable_color_filter = ocr_config.get("enable_color_filter", False)
             self.black_threshold = ocr_config.get("black_threshold", 80)
+        elif hasattr(config, "ocr"):
+            self.enable_color_filter = getattr(config.ocr, "enable_color_filter", False)
+            self.black_threshold = getattr(config.ocr, "black_threshold", 80)
         else:
             self.enable_color_filter = False
             self.black_threshold = 80
@@ -55,24 +68,26 @@ class OCRRecognizer:
 
     def _get_text_adapter(self) -> OCRAdapter:
         if self._text_adapter is None:
-            text_config = self.config
             if isinstance(self.config, dict):
                 text_config = self.config.get("text_ocr", self.config.get("ocr", {}))
             elif hasattr(self.config, "text_ocr"):
                 text_config = self.config.text_ocr
             elif hasattr(self.config, "ocr"):
                 text_config = self.config.ocr
-            self._text_adapter = create_ocr_adapter(self.text_adapter_type, text_config)
+            else:
+                text_config = {}
+            self._text_adapter = create_ocr_adapter(self.text_adapter_type, _config_to_dict(text_config))
         return self._text_adapter
 
     def _get_formula_adapter(self) -> OCRAdapter:
         if self._formula_adapter is None:
-            formula_config = {}
             if isinstance(self.config, dict):
                 formula_config = self.config.get("formula_ocr", {})
             elif hasattr(self.config, "formula_ocr"):
                 formula_config = self.config.formula_ocr
-            self._formula_adapter = create_ocr_adapter(self.formula_adapter_type, formula_config)
+            else:
+                formula_config = {}
+            self._formula_adapter = create_ocr_adapter(self.formula_adapter_type, _config_to_dict(formula_config))
         return self._formula_adapter
 
     def _preprocess_frame(self, frame_path: str) -> str:

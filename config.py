@@ -82,11 +82,34 @@ class ASRConfig:
 
 @dataclass
 class OCRConfig:
-    adapter_type: str = "paddleocr"
-    language: str = "ch"
-    use_angle_cls: bool = True
-    enable_color_filter: bool = True
+    """OCR 全局配置（两引擎并行，R-008 定案）"""
+    text_adapter_type: str = "paddleocr"
+    formula_adapter_type: str = "formula_net"
+    enable_color_filter: bool = False  # P2 可选，MVP 默认关闭
     black_threshold: int = 120
+
+
+@dataclass
+class FrameDedupConfig:
+    """M3 关键帧去重配置（R-009 定案：dHash 阈值 0.02）"""
+    algorithm: str = "dhash"
+    threshold: float = 0.02
+    interval_sec: float = 1.0
+
+
+@dataclass
+class TextOCRConfig:
+    """文字识别引擎配置（PP-OCRv6）"""
+    adapter_type: str = "paddleocr"
+    text_detection_model_name: str = "PP-OCRv6_small_det"
+    text_recognition_model_name: str = "PP-OCRv6_small_rec"
+
+
+@dataclass
+class FormulaOCRConfig:
+    """公式识别引擎配置（PP-FormulaNet）"""
+    adapter_type: str = "formula_net"
+    formula_model_name: str = "PP-FormulaNet_plus-M"
 
 
 @dataclass
@@ -121,6 +144,9 @@ class Config:
     tasks: Dict[str, TaskConfig] = field(default_factory=dict)
     asr: ASRConfig = field(default_factory=ASRConfig)
     ocr: OCRConfig = field(default_factory=OCRConfig)
+    frame_dedup: FrameDedupConfig = field(default_factory=FrameDedupConfig)
+    text_ocr: TextOCRConfig = field(default_factory=TextOCRConfig)
+    formula_ocr: FormulaOCRConfig = field(default_factory=FormulaOCRConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
@@ -187,6 +213,21 @@ class ConfigManager:
             for k, v in data["ocr"].items():
                 if hasattr(self.config.ocr, k):
                     setattr(self.config.ocr, k, v)
+
+        if "frame_dedup" in data:
+            for k, v in data["frame_dedup"].items():
+                if hasattr(self.config.frame_dedup, k):
+                    setattr(self.config.frame_dedup, k, v)
+
+        if "text_ocr" in data:
+            for k, v in data["text_ocr"].items():
+                if hasattr(self.config.text_ocr, k):
+                    setattr(self.config.text_ocr, k, v)
+
+        if "formula_ocr" in data:
+            for k, v in data["formula_ocr"].items():
+                if hasattr(self.config.formula_ocr, k):
+                    setattr(self.config.formula_ocr, k, v)
 
         if "output" in data:
             for k, v in data["output"].items():

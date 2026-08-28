@@ -78,18 +78,14 @@ class FormulaNetAdapter(OCRAdapter):
             for box in layout.get("boxes", []):
                 label = box["label"]
                 score = float(box["score"])
-                coords = box["coordinate"]
-                xs = [p[0] for p in coords]
-                ys = [p[1] for p in coords]
-                x1 = min(xs) / img_w if img_w > 0 else 0
-                y1 = min(ys) / img_h if img_h > 0 else 0
-                x2 = max(xs) / img_w if img_w > 0 else 1
-                y2 = max(ys) / img_h if img_h > 0 else 1
+                box_coords = self._normalize_box(box["coordinate"], img_w, img_h)
+                if box_coords is None:
+                    continue
 
                 ocr_results.append(OCRResult(
                     text=f"[{label}]",
                     confidence=score,
-                    bounding_box=[x1, y1, x2, y2],
+                    bounding_box=box_coords,
                     block_type=label,  # formula / text / title / image / header
                 ))
 
@@ -103,14 +99,7 @@ class FormulaNetAdapter(OCRAdapter):
             box_coords = None
             if polys is not None and len(polys) > 0:
                 try:
-                    poly = polys[0] if hasattr(polys, '__len__') else polys
-                    xs = [p[0] for p in poly]
-                    ys = [p[1] for p in poly]
-                    x1 = min(xs) / img_w if img_w > 0 else 0
-                    y1 = min(ys) / img_h if img_h > 0 else 0
-                    x2 = max(xs) / img_w if img_w > 0 else 1
-                    y2 = max(ys) / img_h if img_h > 0 else 1
-                    box_coords = [x1, y1, x2, y2]
+                    box_coords = self._normalize_box(polys, img_w, img_h)
                 except (IndexError, TypeError, ValueError):
                     box_coords = None
 
@@ -124,6 +113,29 @@ class FormulaNetAdapter(OCRAdapter):
 
         logger.info(f"FormulaNet 识别完成: {len(ocr_results)}条（含版面和公式）")
         return ocr_results
+
+    def _normalize_box(self, coords, img_w: int, img_h: int):
+        """将坐标归一化为 [x1, y1, x2, y2]（0-1 相对坐标）
+
+        兼容两种格式：
+        - 平铺 [x1, y1, x2, y2]（PP-DocLayout_plus 版面检测结果）
+        - 多边形嵌套 [[x1,y1], [x2,y2], ...]（dt_polys 检测框）
+        """
+        if coords is None or len(coords) == 0:
+            return None
+        flat = list(coords[0]) if isinstance(coords[0], (list, tuple)) else list(coords)
+        if len(flat) < 4:
+            return None
+        try:
+            xs = [float(p[0]) for p in flat] if isinstance(flat[0], (list, tuple)) else [float(flat[i]) for i in (0, 2)]
+            ys = [float(p[1]) for p in flat] if isinstance(flat[0], (list, tuple)) else [float(flat[i]) for i in (1, 3)]
+        except (TypeError, ValueError, IndexError):
+            return None
+        x1 = min(xs) / img_w if img_w > 0 else 0
+        y1 = min(ys) / img_h if img_h > 0 else 0
+        x2 = max(xs) / img_w if img_w > 0 else 1
+        y2 = max(ys) / img_h if img_h > 0 else 1
+        return [x1, y1, x2, y2]
 
     def _get_image_size(self, image_path: str) -> tuple:
         """获取图片尺寸"""

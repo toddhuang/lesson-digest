@@ -39,3 +39,15 @@ litellm>=1.98.0
 # === 其他 ===
 tqdm>=4.60
 psutil>=5.9
+
+# ============================================================
+# !! 重要：安装完成后必须运行 cudnn 统一脚本（否则 torch 与 paddle
+#    同名 cudnn DLL 版本不同会导致 WinError 127 崩溃）!!
+#
+#    python scripts/setup_cudnn.py
+#
+# 说明：torch 自带 cudnn 9.9（torch/lib），paddle 的 nvidia 依赖是 9.5，
+# paddle 编译期望 9.9。脚本将 torch/lib 的 cudnn 改名 .bak，并用 9.9
+# 覆盖 nvidia/cudnn/bin，两框架统一加载同一份文件。
+# pip 重装 torch 或 nvidia-cudnn-cu12 后需重新运行。
+# ============================================================
