@@ -18,6 +18,7 @@ from utils.models import Problem, SolutionStep
 from utils.timestamp import parse_timestamp, format_timestamp
 from utils.logger import setup_logger
 from utils.exceptions import LLMResponseParseError
+from utils.llm_json import parse_llm_json
 from core.llm.protocol import LLMGenerator
 
 logger = setup_logger("M8_problem")
@@ -176,11 +177,8 @@ class ProblemExtractor:
 
     def _parse_solution_response(self, content: str) -> List[SolutionStep]:
         """解析解题过程 LLM 返回的 JSON"""
-        clean = re.sub(r'```json\s*', '', content)
-        clean = re.sub(r'```\s*', '', clean).strip()
-
         try:
-            data = json.loads(clean)
+            data = parse_llm_json(content)
         except json.JSONDecodeError as e:
             raise LLMResponseParseError(f"解题过程JSON解析失败: {e}, 原始内容: {content[:200]}")
 
@@ -329,12 +327,8 @@ class ProblemExtractor:
 
     def _parse_response(self, content: str) -> List[Problem]:
         """解析 LLM 返回的 JSON"""
-        clean = re.sub(r'```json\s*', '', content)
-        clean = re.sub(r'```\s*', '', clean)
-        clean = clean.strip()
-
         try:
-            data = json.loads(clean)
+            data = parse_llm_json(content)
         except json.JSONDecodeError as e:
             raise LLMResponseParseError(f"题目提取结果JSON解析失败: {e}, 原始内容: {content[:200]}")
 

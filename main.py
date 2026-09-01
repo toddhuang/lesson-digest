@@ -24,6 +24,15 @@ from utils.logger import setup_logger
 logger = setup_logger("main")
 
 
+def _build_debugger(config):
+    """构造 DebugSink（release 时 config.debug.enabled=False 返回 None）"""
+    if not getattr(config, "debug", None) or not config.debug.enabled:
+        return None
+    from debugger.sink import DebugSink
+    debug_root = config.paths.debug_dir
+    return DebugSink(debug_root=debug_root)
+
+
 def main():
     parser = argparse.ArgumentParser(description="教学视频内容提取与总结工具")
     parser.add_argument("video", help="输入视频文件路径")
@@ -38,7 +47,8 @@ def main():
     config = load_config(args.config)
 
     # 创建并运行流水线
-    pipeline = Pipeline(config)
+    debugger = _build_debugger(config)
+    pipeline = Pipeline(config, debugger=debugger)
 
     try:
         result = pipeline.run(
@@ -52,7 +62,7 @@ def main():
         print("处理完成!")
         print("=" * 60)
         print(f"视频: {result.video_path}")
-        print(f"逐字稿: {len(result.asr_results)} 句")
+        print(f"逐字稿: {len(result.corrected_transcript.text) if result.corrected_transcript else 0} 字")
         print(f"知识点: {len(result.knowledge_points)} 个")
         print(f"题目: {len(result.problems)} 道")
         print(f"截图: {len([p for p in result.screenshot_paths if p])} 张")

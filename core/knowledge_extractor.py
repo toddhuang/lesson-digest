@@ -21,6 +21,7 @@ from utils.models import KnowledgePoint
 from utils.timestamp import parse_timestamp
 from utils.logger import setup_logger
 from utils.exceptions import LLMResponseParseError, EmptyResultError
+from utils.llm_json import parse_llm_json
 from core.llm.protocol import LLMGenerator
 
 logger = setup_logger("M7_knowledge")
@@ -170,11 +171,8 @@ class KnowledgeExtractor:
 
     def _parse_summary_response(self, content: str) -> tuple:
         """解析知识点深度整理 LLM 返回的 JSON"""
-        clean = re.sub(r'```json\s*', '', content)
-        clean = re.sub(r'```\s*', '', clean).strip()
-
         try:
-            data = json.loads(clean)
+            data = parse_llm_json(content)
         except json.JSONDecodeError as e:
             raise LLMResponseParseError(f"知识点深度整理JSON解析失败: {e}, 原始内容: {content[:200]}")
 
@@ -182,12 +180,8 @@ class KnowledgeExtractor:
 
     def _parse_response(self, content: str) -> List[KnowledgePoint]:
         """解析 LLM 返回的 JSON"""
-        clean = re.sub(r'```json\s*', '', content)
-        clean = re.sub(r'```\s*', '', clean)
-        clean = clean.strip()
-
         try:
-            data = json.loads(clean)
+            data = parse_llm_json(content)
         except json.JSONDecodeError as e:
             raise LLMResponseParseError(f"知识点提取结果JSON解析失败: {e}, 原始内容: {content[:200]}")
 
