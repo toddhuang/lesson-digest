@@ -18,6 +18,7 @@ venv_paddle3/
 cache/
 temp/
 output/
+debug/
 
 # 测试文件
 test_video.mp4
@@ -38,6 +39,13 @@ config.yaml
 # 日志
 *.log
 logs/
+
+# 测试覆盖率/类型检查缓存（预防性）
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
 
 # IDE
 .vscode/
