@@ -149,6 +149,8 @@ class Pipeline:
             self._run_stage("asr", context, force)
             self._run_stage("ocr", context, force)
             self._run_stage("correct_and_extract", context, force)
+            self._run_stage("summarize_solution", context, force)
+            self._run_stage("summarize_knowledge", context, force)
             self._run_stage("merge_text", context, force)
             self._run_stage("capture_screenshots", context, force)
             self._run_stage("generate_mindmap", context, force)
@@ -196,6 +198,10 @@ class Pipeline:
                 self._stage_ocr(context, force)
             elif stage == "correct_and_extract":
                 self._stage_correct_and_extract(context)
+            elif stage == "summarize_solution":
+                self._stage_summarize_solution(context)
+            elif stage == "summarize_knowledge":
+                self._stage_summarize_knowledge(context)
             elif stage == "merge_text":
                 self._stage_merge_text(context)
             elif stage == "capture_screenshots":
