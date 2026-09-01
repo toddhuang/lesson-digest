@@ -67,6 +67,13 @@ class MockLLMAdapter(LLMAdapter):
                 {"step_number": 2, "content": "令$(x-2)(x-3)=0$，得 $x=2$ 或 $x=3$", "start_time": 28.0, "end_time": 35.0},
             ], ensure_ascii=False)
 
+        # 知识点深度整理（10 设计 issue #9，ASR+OCR 融合）
+        if "知识点深度整理助手" in prompt:
+            return json.dumps({
+                "content": "老师讲解了二次函数 $f(x)=ax^2+bx+c$ 的图像性质，重点分析了开口方向与系数 $a$ 的关系。",
+                "supplement": "补充：二次函数的顶点坐标为 $(-\\frac{b}{2a}, f(-\\frac{b}{2a}))$（高考范围内）。",
+            }, ensure_ascii=False)
+
         if "思维导图" in prompt or "OPML" in prompt:
             return '''<?xml version="1.0" encoding="UTF-8"?>
 <opml version="2.0">

@@ -30,6 +30,7 @@ from core.ocr import OCRRecognizer
 from core.text_merger import TextMerger
 from core.content_extractor import ContentExtractor
 from core.problem_extractor import ProblemExtractor
+from core.knowledge_extractor import KnowledgeExtractor
 from core.screenshot_capture import ScreenshotCapture
 from core.mindmap_generator import MindmapGenerator
 from core.llm import LLMClient
@@ -48,6 +49,7 @@ STAGES = [
     "ocr",
     "correct_and_extract",
     "summarize_solution",
+    "summarize_knowledge",
     "merge_text",
     "capture_screenshots",
     "generate_mindmap",
@@ -107,6 +109,11 @@ class Pipeline:
         )
         self.mindmap_generator = MindmapGenerator(
             self.llm_client.get_session("mindmap_generation")
+        )
+        # knowledge_extractor 用于知识点深度整理（10 设计 issue #9）
+        self.knowledge_extractor = KnowledgeExtractor(
+            self.llm_client.get_session("knowledge_extraction"),
+            summary_llm=self.llm_client.get_session("knowledge_summary"),
         )
 
     def run(self, video_path: str, output_dir: str, force: bool = False) -> ProcessResult:
@@ -286,6 +293,15 @@ class Pipeline:
         for problem in context.problems:
             self.problem_extractor.enrich_solution(
                 problem, context.corrected_transcript, context.ocr_results
+            )
+
+    def _stage_summarize_knowledge(self, context: PipelineContext):
+        """知识点深度整理（ASR+OCR 融合，每知识点独立调 LLM，10 设计 issue #9）"""
+        if not context.knowledge_points:
+            return
+        for kp in context.knowledge_points:
+            self.knowledge_extractor.enrich_knowledge(
+                kp, context.corrected_transcript, context.ocr_results
             )
 
     def _stage_merge_text(self, context: PipelineContext):

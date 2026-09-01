@@ -370,6 +370,7 @@ class ContentExtractor:
                 index=len(results) + 1,
                 name=name,
                 start_time=start_time,
+                end_time=end_time,
                 confidence=0.8,
             ))
 

@@ -184,11 +184,14 @@ class OCRFrameResult:
 
 @dataclass
 class KnowledgePoint:
-    """知识点，由 M7 知识点提取模块返回"""
+    """知识点，由 M7 知识点提取模块返回（10 设计：扩展 end_time+content+supplement 用于深度整理）"""
     index: int = 0
     name: str = ""
     start_time: float = 0.0
+    end_time: float = 0.0
     confidence: float = 1.0
+    content: str = ""        # 核心内容：老师讲解总结（公式 LaTeX 嵌入）
+    supplement: str = ""     # 补充内容：豆包补充（高考范围内）
 
 
 @dataclass
