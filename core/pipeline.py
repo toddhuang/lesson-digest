@@ -356,10 +356,12 @@ class Pipeline:
         video_name = os.path.splitext(os.path.basename(context.video_path))[0]
 
         # 题目原题截图（debug/07_题目原题截图/，不做颜色过滤，issue #11）
-        q_dir = os.path.join(self.config.paths.debug_dir, video_name, "07_题目原题截图")
-        context.screenshot_paths = self.screenshot_capture.capture_screenshots(
-            context.video_path, context.problems, q_dir, enable_color_filter=False
-        )
+        context.screenshot_paths = []
+        if context.problems:
+            q_dir = os.path.join(self.config.paths.debug_dir, video_name, "07_题目原题截图")
+            context.screenshot_paths = self.screenshot_capture.capture_screenshots(
+                context.video_path, context.problems, q_dir, enable_color_filter=False
+            )
 
         # 知识点截图（debug/06_知识点截图/，issue #12）
         if context.knowledge_points:

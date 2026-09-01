@@ -35,6 +35,7 @@ funasr==1.4.2
 
 # === LiteLLM（统一多模型调用：豆包/DeepSeek 等 OpenAI 兼容 API）===
 litellm>=1.98.0
+tenacity>=8.2  # litellm 重试机制依赖
 
 # === 其他 ===
 tqdm>=4.60
