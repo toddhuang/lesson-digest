@@ -8,7 +8,9 @@
 
 ## 一、模块概述
 
-LLM 适配层采用**适配器模式（Adapter Pattern）**，定义统一的 LLM 调用接口，封装具体 LLM 服务的 API 差异。当前实现为 VolcengineAdapter（火山引擎豆包 API）、DeepSeekAdapter（云端 DeepSeek API）和 MockAdapter（测试用假数据），将来新增 LLM 服务（如 OpenAI、Claude、通义千问、智谱GLM）时只需新增适配器，核心业务代码（M11 LLM 客户端模块）零修改。
+LLM 适配层采用**适配器模式（Adapter Pattern）**，定义统一的 LLM 调用接口，封装具体 LLM 服务的 API 差异。M11-M17 重构后当前实现为 **LiteLLMAdapter**（通过 LiteLLM 统一调用所有 OpenAI 兼容服务商，如豆包、DeepSeek）和 **MockLLMAdapter**（测试用假数据）。将来新增 LLM 服务时只需在配置注册表中添加模型+服务商，无需新增适配器类。
+
+> **重构变化**：旧版 `VolcengineAdapter` + `DeepSeekAdapter` 两个独立类合并为 `LiteLLMAdapter` 统一处理；旧接口 `chat` / `chat_stream` / `get_context_length` / `count_tokens` / `get_model_name` 全部废弃，统一为 `generate(prompt, payload, temperature)`。
 
 ---
 
@@ -18,279 +20,203 @@ LLM 适配层采用**适配器模式（Adapter Pattern）**，定义统一的 LL
 
 ```python
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import List, Iterator, Optional
+from config import ModelConfig, ProviderConfig
+from utils.models import LLMResponse
 
-@dataclass
-class TokenUsage:
-    prompt_tokens: int       # 输入 token 数
-    completion_tokens: int   # 输出 token 数
-    total_tokens: int        # 总 token 数
-
-@dataclass
-class LLMResponse:
-    content: str             # 生成的文本内容
-    model: str               # 使用的模型名
-    usage: TokenUsage        # token 使用统计
-    finish_reason: str       # 结束原因（stop/length/content_filter）
-
-@dataclass
-class LLMChunk:
-    delta_content: str       # 增量文本内容
-    finish_reason: Optional[str]  # 结束原因（最后一个 chunk 有值）
-    usage: Optional[TokenUsage]   # token 使用统计（最后一个 chunk 有值）
 
 class LLMAdapter(ABC):
-    """LLM 适配器抽象基类"""
+    """LLM 适配器抽象基类
+
+    每个适配器实例绑定一个具体模型（ModelConfig）和服务商（ProviderConfig）。
+    适配器负责将 prompt + payload 转换为底层 API 调用，
+    内部处理流式接收、分块、异常映射等细节。
+    """
 
     @abstractmethod
-    def chat(
+    def __init__(
         self,
-        messages: List[dict],
-        temperature: float = 0.3,
-        top_p: float = 0.9,
-        max_tokens: int = 2000,
-        **kwargs
-    ) -> LLMResponse:
-        """非流式对话"""
+        model_config: ModelConfig,
+        provider_config: ProviderConfig,
+        max_retries: int = 3,
+        timeout: int = 120,
+    ):
         pass
 
     @abstractmethod
-    def chat_stream(
-        self,
-        messages: List[dict],
-        temperature: float = 0.3,
-        top_p: float = 0.9,
-        max_tokens: int = 2000,
-        **kwargs
-    ) -> Iterator[LLMChunk]:
-        """流式对话，返回响应块迭代器"""
-        pass
+    def generate(self, prompt: str, payload: str, temperature: float) -> LLMResponse:
+        """生成 LLM 响应
 
-    @abstractmethod
-    def get_context_length(self) -> int:
-        """返回模型上下文长度（token）"""
-        pass
+        Args:
+            prompt: 系统提示词（任务指令）
+            payload: 待处理内容（数据）
+            temperature: 温度参数（由 LLMSession 从任务配置传入）
 
-    @abstractmethod
-    def count_tokens(self, text: str) -> int:
-        """统计文本的 token 数"""
-        pass
+        Returns:
+            LLMResponse 对象
 
-    @abstractmethod
-    def get_model_name(self) -> str:
-        """返回模型名"""
+        Raises:
+            LLMClientError: 参数错误或认证失败（不重试）
+            LLMRateLimitError: 速率限制（可重试）
+            LLMTimeoutError: 超时（可重试）
+            LLMConnectionError: 连接失败（可重试）
+            LLMServerError: 服务端错误（可重试）
+            LLMContextOverflowError: 输入超过上下文限制
+        """
         pass
 ```
 
+> 共享数据结构 `LLMResponse` / `TokenUsage` / `LLMChunk` 统一定义见 `00_数据模型.md` 第四节。
+
 ---
 
-## 三、当前实现一：VolcengineAdapter（火山引擎豆包 API，默认推荐）
+## 三、当前实现一：LiteLLMAdapter（统一处理多服务商，默认推荐）
 
 ### 3.1 类定义
 
 ```python
-class VolcengineAdapter(LLMAdapter):
-    """火山引擎豆包 API 适配器（默认推荐，中文同音词纠错效果好）"""
+class LiteLLMAdapter(LLMAdapter):
+    """基于 LiteLLM 的 LLM 适配器，统一调用所有 OpenAI 兼容服务商"""
 
-    def __init__(self, config: dict):
-        self.base_url = config["base_url"]
-        self.model = config["model"]
-        self.api_key = config["api_key"]
-        self._context_length = config.get("context_length", 131072)
-        self._client = None
+    def __init__(self, model_config: ModelConfig, provider_config: ProviderConfig,
+                 max_retries: int = 3, timeout: int = 120):
+        self.model_config = model_config
+        self.provider_config = provider_config
+        self.max_retries = max_retries
+        self.timeout = timeout
+        self._splitter = RecursiveTextSplitter()
 ```
 
-### 3.2 初始化客户端
+### 3.2 generate（自动分块 + 流式接收）
 
-使用 OpenAI Python SDK（豆包兼容 OpenAI API 格式，但使用 `responses.create` 接口）：
+**功能**：生成 LLM 响应，自动处理 payload 超限分块。
+
+**流程**：
+1. `count_tokens(prompt)` 计算 prompt token 数
+2. 计算可用空间 = `context_length * 0.9 - prompt_tokens - max_output`
+3. `count_tokens(payload)` 计算 payload token 数
+4. payload 未超限 → 单次调用 `_call_single`
+5. payload 超限 → `RecursiveTextSplitter.split()` 分块，逐块调用并拼接 content、累加 usage
+
+**输入参数**：
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| prompt | str | 是 | 系统提示词（任务指令） |
+| payload | str | 是 | 待处理内容 |
+| temperature | float | 是 | 温度参数（由 LLMSession 传入） |
+
+**输出**：LLMResponse（分块调用时 content 为各块 `"\n".join`，usage 为累加值）
+
+**异常**：见 3.3 异常映射表
+
+### 3.3 _call_single（单次 API 调用 + 异常映射）
+
+使用 `litellm.completion(stream=True)` 流式接收，model 名拼为 `{litellm_prefix}/{model_name}`（如 `openai/doubao-seed-2-1-pro-260628`）。
 
 ```python
-from openai import OpenAI
-
-self._client = OpenAI(
-    base_url=self.base_url,
-    api_key=self.api_key,
-)
-```
-
-### 3.3 chat（重要：使用 responses.create 接口）
-
-**功能**：非流式对话。
-
-> **重要**：豆包 seed 系列模型**不支持** `chat.completions.create` 接口（会返回 404），必须使用 `responses.create` 接口。且必须禁用思考过程 `reasoning={"effort": "none"}`，否则 token 会被思考过程占满，status=incomplete，output_text 为空。
-
-**调用方式**：
-```python
-response = self._client.responses.create(
-    model=self.model,
-    input=messages,
+stream = litellm.completion(
+    model=f"{provider_config.litellm_prefix}/{model_config.name}",
+    api_base=provider_config.base_url,
+    api_key=provider_config.api_key,
+    messages=[
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": payload},
+    ],
     temperature=temperature,
-    top_p=top_p,
-    max_output_tokens=max_tokens,
-    reasoning={"effort": "none"},  # 必须禁用思考过程
-)
-```
-
-**返回转换**：
-```python
-return LLMResponse(
-    content=response.output_text,
-    model=response.model,
-    usage=TokenUsage(
-        prompt_tokens=response.usage.input_tokens,
-        completion_tokens=response.usage.output_tokens,
-        total_tokens=response.usage.total_tokens,
-    ),
-    finish_reason="stop" if response.status == "completed" else response.status,
-)
-```
-
-### 3.4 chat_stream
-
-**功能**：流式对话。
-
-使用 `responses.create` 接口的流式模式：
-```python
-stream = self._client.responses.create(
-    model=self.model,
-    input=messages,
-    temperature=temperature,
-    top_p=top_p,
-    max_output_tokens=max_tokens,
-    reasoning={"effort": "none"},
+    max_tokens=model_config.max_output,
     stream=True,
+    stream_options={"include_usage": True},
+    num_retries=max_retries,
+    timeout=timeout,
 )
 ```
 
-### 3.5 count_tokens
+**异常映射表**（按 AGENTS.md 规范分类处理，禁止裸 `except Exception`）：
 
-豆包使用与 GPT 相同的 tokenizer，使用 tiktoken cl100k_base。
+| LiteLLM 异常 | 项目异常 | 处理策略 |
+|---|---|---|
+| `BadRequestError` (400) | `LLMClientError` | 参数错误，不重试 |
+| `AuthenticationError` (401) | `LLMClientError` | 认证失败，不重试 |
+| `RateLimitError` (429) | `LLMRateLimitError` | 限流，指数退避重试 |
+| `InternalServerError` (5xx) | `LLMServerError` | 服务端错误，延迟重试 |
+| `Timeout` | `LLMTimeoutError` | 超时，改流式重试 |
+| `APIConnectionError` | `LLMConnectionError` | 连接失败，重试 |
+| `APIError` (status≥500) | `LLMServerError` | 服务端错误，重试 |
+| `APIError` (其他) | `LLMError` | 兜底 |
+
+### 3.4 _collect_stream（流式响应收集）
+
+遍历流式 chunk，收集 `delta.content` 拼接为完整 content，记录 `finish_reason`，从最后一个含 `usage` 的 chunk 提取 token 统计。
 
 ---
 
-## 四、当前实现二：DeepSeekAdapter（云端 DeepSeek API，备选）
+## 四、当前实现二：MockLLMAdapter（测试用假数据）
 
 ### 4.1 类定义
 
 ```python
-class DeepSeekAdapter(LLMAdapter):
-    """云端 DeepSeek API 适配器（备选服务商）"""
+class MockLLMAdapter(LLMAdapter):
+    """Mock LLM 适配器，根据 prompt 内容返回假数据，用于链路测试"""
 
-    def __init__(self, config: dict):
-        self.base_url = config["base_url"]
-        self.model = config["model"]
-        self.api_key = config["api_key"]
-        self._context_length = config.get("context_length", 131072)
-        self._client = None
+    def __init__(self, model_config: ModelConfig = None, provider_config: ProviderConfig = None,
+                 max_retries: int = 3, timeout: int = 120):
+        if model_config is None:
+            model_config = ModelConfig(name="mock-model", provider="mock", ...)
+        self.model_config = model_config
 ```
 
-### 4.2 初始化客户端
+### 4.2 generate
 
-```python
-from openai import OpenAI
+根据 prompt 关键词返回不同假数据：
+- 含 `corrected_text` / `一次完成`：返回合并调用 JSON `{corrected_text, knowledge_segments, problem_segments}`
+- 含 `思维导图` / `OPML`：返回 OPML XML
+- 含 `知识点`：返回知识点 JSON 数组
+- 含 `题目` / `习题`：返回题目 JSON 数组
+- 其他：返回纯文本假数据
 
-self._client = OpenAI(
-    base_url=self.base_url,
-    api_key=self.api_key,
-)
-```
-
-### 4.3 chat（重要：禁用思考过程）
-
-**功能**：非流式对话。
-
-> **重要**：DeepSeek 推理模型必须禁用思考过程 `extra_body={"thinking": {"type": "disabled"}}`，否则 token 会被思考过程占满。
-
-**调用方式**：
-```python
-response = self._client.chat.completions.create(
-    model=self.model,
-    messages=messages,
-    temperature=temperature,
-    top_p=top_p,
-    max_tokens=max_tokens,
-    stream=False,
-    extra_body={"thinking": {"type": "disabled"}},  # 必须禁用思考过程
-)
-```
-
-### 4.4 chat_stream
-
-与 chat 类似，设置 `stream=True`，同样需要禁用思考过程。
-
-### 4.5 count_tokens
-
-DeepSeek 使用与 GPT 相同的 tokenizer，使用 tiktoken cl100k_base。
+不依赖真实 API，用于 Pipeline 链路测试。
 
 ---
 
-## 五、当前实现三：MockAdapter（测试用假数据）
+## 五、可扩展实现
 
-### 5.1 类定义
+| 适配器 | 服务 | 说明 |
+|---|---|---|
+| LiteLLMAdapter | 豆包 / DeepSeek 等 OpenAI 兼容服务商 | **当前默认**，通过 LiteLLM 统一调用，配置注册表添加模型即可 |
+| MockLLMAdapter | 假数据 | **当前实现**，单元测试用 |
+| OpenAIAdapter | OpenAI API | GPT-4o，LiteLLM 已支持，配置即可启用 |
+| ClaudeAdapter | Anthropic API | Claude 3 Opus，LiteLLM 已支持 |
+| QwenCloudAdapter | 通义千问 API | 阿里云端，LiteLLM 已支持 |
+| ZhipuAdapter | 智谱 GLM API | 智谱云端，LiteLLM 已支持 |
+
+> LiteLLM 已覆盖主流服务商，新增服务商只需在 `config.yaml` 的 `llm.models[]` 和 `llm.providers` 注册，无需新增适配器类。
+
+---
+
+## 六、适配器工厂
+
+### 6.1 create_llm_adapter
+
+**功能**：根据模型和服务商配置创建 LLM 适配器实例。
 
 ```python
-class MockAdapter(LLMAdapter):
-    """Mock 适配器，返回假数据，用于单元测试，不依赖真实 API"""
-
-    def __init__(self, config: dict = None):
-        self.model = "mock-model"
-        self._context_length = 8192
+def create_llm_adapter(
+    model_config: ModelConfig,
+    provider_config: ProviderConfig,
+    max_retries: int = 3,
+    timeout: int = 120,
+    mock: bool = False,
+) -> LLMAdapter:
+    if mock:
+        return MockLLMAdapter(model_config, provider_config, max_retries, timeout)
+    return LiteLLMAdapter(model_config, provider_config, max_retries, timeout)
 ```
 
-### 5.2 chat
-
-返回预设的假数据，根据 messages 中的关键词返回不同的模拟响应。
+适配器实例由 `LLMClient._get_adapter(model_name)` 懒加载并按模型名缓存，同一模型复用一个适配器。
 
 ---
 
-## 六、可扩展实现
+## 七、依赖关系
 
-| 适配器 | 服务 | 上下文 | 说明 |
-|---|---|---|---|
-| VolcengineAdapter | 火山引擎豆包 API | 128K+ | **当前默认**，中文同音词纠错效果好 |
-| DeepSeekAdapter | DeepSeek API | 128K | 当前备选，长上下文 |
-| MockAdapter | 假数据 | 8K | 单元测试用 |
-| OpenAIAdapter | OpenAI API | 128K | GPT-4o，质量最高，需代理 |
-| ClaudeAdapter | Anthropic API | 200K | Claude 3 Opus，长上下文最强 |
-| QwenCloudAdapter | 通义千问 API | 32K+ | 阿里云端，国内访问快 |
-| ZhipuAdapter | 智谱 GLM API | 128K | 智谱云端，国内 |
-
----
-
-## 七、适配器工厂
-
-### 7.1 create_adapter
-
-**功能**：根据服务商名称创建对应的 LLM 适配器。
-
-```python
-def create_adapter(provider: str, config: dict) -> LLMAdapter:
-    """
-    创建 LLM 适配器
-
-    Args:
-        provider: 服务商名称（"volcengine"/"deepseek"/"mock"/...）
-        config: 服务商配置
-
-    Returns:
-        LLMAdapter 实例
-    """
-    adapters = {
-        "volcengine": VolcengineAdapter,
-        "deepseek": DeepSeekAdapter,
-        "mock": MockAdapter,
-        # 后续新增适配器在此注册
-    }
-    if provider not in adapters:
-        raise ValueError(f"不支持的服务商: {provider}")
-    return adapters[provider](config)
-```
-
----
-
-## 八、依赖关系
-
-- **被依赖**：M11 LLM 客户端模块（通过 LLMAdapter 接口调用）
-- **依赖**：无（隔离第三方库）
-- **第三方依赖**：openai（OpenAI Python SDK，豆包和 DeepSeek 都兼容）、tiktoken（token 计数）
+- **被依赖**：M11 LLM 客户端模块（通过 LLMAdapter 接口调用，由 LLMSession 桥接 2 参数 `generate(prompt, payload)` 到 3 参数 `generate(prompt, payload, temperature)`）
+- **依赖**：`utils.token_counter`（token 计数）、`utils.exceptions`（异常映射）、`core.llm.text_splitter`（超限分块）
+- **第三方依赖**：litellm（统一 LLM 调用）、tiktoken（token 计数）
