@@ -283,6 +283,7 @@ class PipelineContext:
     knowledge_points: Optional[List[KnowledgePoint]] = None
     problems: Optional[List[Problem]] = None
     screenshot_paths: Optional[List[str]] = None
+    knowledge_screenshot_paths: Optional[List[str]] = None
     mindmap_opml: Optional[str] = None
     output_files: Optional[OutputFiles] = None
     completed_stages: List[str] = field(default_factory=list)

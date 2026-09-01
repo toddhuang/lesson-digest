@@ -126,6 +126,7 @@ class OutputConfig:
 class PathsConfig:
     cache_dir: str = "./cache"
     output_dir: str = "./output"
+    debug_dir: str = "./debug"
     temp_dir: str = "./temp"
     log_dir: str = "./logs"
 

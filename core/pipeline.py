@@ -282,12 +282,21 @@ class Pipeline:
         context.full_text = self.text_merger.merge(transcript)
 
     def _stage_capture_screenshots(self, context: PipelineContext):
-        """题目截图"""
+        """题目截图 + 知识点截图"""
         video_name = os.path.splitext(os.path.basename(context.video_path))[0]
+
+        # 题目截图（output，做颜色过滤，供学生看原题）
         screenshots_dir = os.path.join(self.config.paths.output_dir, video_name, self.config.output.screenshots_dirname)
         context.screenshot_paths = self.screenshot_capture.capture_screenshots(
             context.video_path, context.problems, screenshots_dir
         )
+
+        # 知识点截图（debug，不做颜色过滤，issue #12）
+        if context.knowledge_points:
+            kp_dir = os.path.join(self.config.paths.debug_dir, video_name, "06_截图", "知识点")
+            context.knowledge_screenshot_paths = self.screenshot_capture.capture_knowledge_screenshots(
+                context.video_path, context.knowledge_points, kp_dir
+            )
 
     def _stage_generate_mindmap(self, context: PipelineContext):
         """思维导图生成"""

@@ -99,6 +99,7 @@ output:
 paths:
   cache_dir: "./cache"
   output_dir: "./output"
+  debug_dir: "./debug"
   temp_dir: "./temp"
   log_dir: "./logs"
 
