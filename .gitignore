@@ -20,13 +20,7 @@ output/
 debug/
 
 # 测试文件
-test_video.mp4
-test_*.mp4
-tests/*.mp4
-tests/*.avi
-tests/*.mkv
-tests/*.mov
-tests/*.wav
+tests/*
 
 # 配置文件（含 API Key，不入库；模板 config.example.yaml 入库）
 config.yaml
