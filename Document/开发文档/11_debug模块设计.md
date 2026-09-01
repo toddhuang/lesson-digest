@@ -25,7 +25,7 @@
 1. 新建独立 debug 模块 `debugger/`，release 时可整体删除
 2. debug 输出到 `debug/{视频名}/` 目录（与 output 平级）
 3. 现阶段始终输出 debug（不设运行时开关，但 config 提供总开关用于 release）
-4. 8 类 debug 产物（详见 §三）
+4. **9 类 debug 产物**（详见 §三；第 9 类为运行日志归档，由用户后续追加）
 5. 所有 debug 输出通过统一接口调用
 6. 核心流水线只调 `debugger.save_xxx()`，不直接写文件
 7. release 退出：删 `debugger/` 包 + config 关闭 debug 即可
@@ -38,7 +38,7 @@
 | `core/content_extractor.py` | `_locate_segment` 注入 debugger，每次定位调 `save_locate_record` |
 | `core/pipeline.py` | 接收 `Optional[Debugger]`，各 `_stage_xxx` 内调 `debugger.save_xxx` |
 | `utils/file_utils.py` | 底层 `save_json`/`save_text` 由 debugger 内部复用，业务模块不再直接调 |
-| `utils/logger.py` | 日志体系不变，仍输出 `logs/`（与 `debug/` 分工：日志=运行轨迹，debug=产物快照） |
+| `utils/logger.py` | 重构：setup_logger 不再每次创建独立 file handler；console 独立，file 走 root logger 全局共享。`set_log_file(path)` 全局切换路径；`debugger.attach_log_handler()` 把日志归档到 `debug/{视频名}/09_运行日志/pipeline.log` |
 
 ---
 
@@ -101,11 +101,11 @@ AGENTS.md "适配层模式"约束 ASR/OCR/LLM 隔离第三方库。debugger 不�
 
 ---
 
-## 三、8 类 debug 产物
+## 三、9 类 debug 产物
 
 ### 3.1 目录结构
 
-`debug/{视频名}/` 下 8 个子目录，按产物类型编号平铺：
+`debug/{视频名}/` 下 9 个子目录，按产物类型编号平铺：
 
 ```
 debug/{视频名}/
@@ -131,9 +131,11 @@ debug/{视频名}/
 ├── 07_题目原题截图/
 │   ├── 题目01_t=05m23s.jpg
 │   └── ...
-└── 08_解题过程截图/
-    ├── 题目01_步骤01_t=05m23s.jpg
-    └── ...
+├── 08_解题过程截图/
+│   ├── 题目01_步骤01_t=05m23s.jpg
+│   └── ...
+└── 09_运行日志/
+    └── pipeline.log           # 全局运行日志（多模块共享一个 file handler）
 ```
 
 ### 3.2 产物格式说明
@@ -150,12 +152,14 @@ debug/{视频名}/
 | 6 | 06/知识点截图 | jpg | 文件名同 issue #12，目录从 `06_截图/知识点/` 迁移 |
 | 7 | 07/题目原题截图 | jpg | 文件名 `题目NN_t=NNmNNs.jpg`，**不做颜色过滤**（见 §六） |
 | 8 | 08/解题过程截图 | jpg | 文件名同 issue #13，目录从 `06_截图/解题过程/` 迁移 |
+| 9 | 09/pipeline.log | log | 全局运行日志（多模块共享），由 `debugger.attach_log_handler()` 切换 root logger 的 file handler 归档 |
 
 ### 3.3 格式决策依据（参考大多数软件方案）
 
 - **1/2 类双格式**：json 给程序读（含完整字段），txt 给人读（便于人工查阅）。参考 logging 体系常见 dual output 模式。
 - **3/4 类每段一文件**：每段独立 txt 便于人工对照某知识点/题目的原文片段，避免单文件过长难定位。
 - **5 类 jsonl**：定位是高频小记录，jsonl 便于流式追加、流式读取（无需加载全文）。参考 log4j/logback 的 JSON logging layout。
+- **9 类单文件 pipeline.log**：所有模块共享一个 file handler，便于按视频归档查阅。切换前日志写 `logs/{timestamp}.log`（release fallback），切换后写 `debug/{视频名}/09_运行日志/pipeline.log`。
 
 ---
 
@@ -197,7 +201,11 @@ class DebugSink:
         """6/7/8 类截图：复制 src 到 debug 目录
         category: 'knowledge' / 'question' / 'solution'
         返回 debug 中的目标路径"""
-    
+
+    def attach_log_handler(self) -> bool:
+        """9. 运行日志归档：把全局 file handler 切换到 debug/{视频名}/09_运行日志/pipeline.log
+        必须在 set_video_name() 之后调用；调用后所有 setup_logger 创建的 logger 自动跟随"""
+
     # === 内部辅助 ===
     def _save_text(self, rel_path: str, content: str) -> None: ...
     def _save_json(self, rel_path: str, data: Any) -> None: ...
@@ -208,7 +216,7 @@ class DebugSink:
 
 | pipeline 阶段 | debugger 调用 |
 |---|---|
-| `_stage_probe` | `debugger.set_video_name(video_name)` |
+| `_stage_probe` | `debugger.set_video_name(video_name)` + `debugger.attach_log_handler()`（第 9 类：运行日志归档） |
 | `_stage_asr` | `debugger.save_asr_raw(context.asr_results)` |
 | `_stage_correct_and_extract` | `debugger.save_corrected_text(aligned)` + `save_knowledge_segments(kps)` + `save_problem_segments(problems)`；`content_extractor._locate_segment` 内部调 `save_locate_record` |
 | `_stage_capture_screenshots` | screenshot_capture 直接写到 `debug/{视频名}/06/07/08/`（debugger 不参与截图写入，仅约束目录） |

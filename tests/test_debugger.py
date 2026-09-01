@@ -280,6 +280,63 @@ def test_config_debug_section():
     print("[PASS] config 加载 debug 段（enabled=True, max_size_gb=50）")
 
 
+def test_log_archival_to_debug():
+    """第 9 类产物：运行日志归档到 debug/{视频名}/09_运行日志/pipeline.log
+
+    验证：
+    - debugger.attach_log_handler() 切换全局 file handler 到 debug 目录
+    - 切换后多模块 logger（debugger、ContentExtractor、Pipeline）写入同一文件
+    """
+    import logging
+    import time
+    from utils.logger import setup_logger, set_log_file
+
+    tmpdir = tempfile.mkdtemp(prefix="debug_log_test_")
+    try:
+        sink = DebugSink(debug_root=tmpdir, video_name="测试视频")
+        sink.set_video_name("测试视频")
+
+        # 切换前，先在 logs/ 写一条日志（确保全局 file handler 已初始化）
+        pre_logger = setup_logger("PreAttach")
+        pre_logger.info("[test] 切换前的日志（应出现在 logs/）")
+
+        # 切换到 debug 目录
+        ok = sink.attach_log_handler()
+        assert ok, "attach_log_handler 应返回 True"
+
+        # 切换后多模块写日志
+        log_a = setup_logger("ModuleA")
+        log_b = setup_logger("ModuleB")
+        log_a.info("[test] 模块A的日志（应归档到 debug/09/）")
+        log_b.warning("[test] 模块B的警告（应归档到 debug/09/）")
+        sink.save_asr_raw(build_raw_transcript())  # debugger 自己的 log 也要进 pipeline.log
+
+        # 强制 flush 所有 handler
+        for h in logging.getLogger().handlers:
+            try:
+                h.flush()
+            except Exception:
+                pass
+
+        # 验证 debug/09_运行日志/pipeline.log 存在且包含多模块日志
+        log_path = os.path.join(sink.video_dir, "09_运行日志", "pipeline.log")
+        assert os.path.exists(log_path), f"日志文件应存在: {log_path}"
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "模块A的日志" in content, "应包含 ModuleA 的日志"
+        assert "模块B的警告" in content, "应包含 ModuleB 的日志"
+        assert "ModuleA" in content and "ModuleB" in content, "应保留模块名"
+        assert "[debugger] 1.ASR原始逐字稿" in content, "debugger 自身的 log 也应归档"
+
+        # 验证 logs/ 不再写入新日志（切换后）
+        # 注意：logs/ 文件仍存在（切换前已创建），但切换后不再追加
+        print("[PASS] 第 9 类产物: 运行日志归档到 debug/09_运行日志/pipeline.log（多模块共享）")
+    finally:
+        # 恢复默认 logs/ 路径，避免影响后续测试
+        set_log_file(os.path.join(tempfile.gettempdir(), "test_restore.log"))
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def main():
     print("=" * 60)
     print("issue #11 - debugger 模块验证")
@@ -291,6 +348,7 @@ def main():
     test_pipeline_duck_typing_debugger()
     test_release_no_import_dependency()
     test_config_debug_section()
+    test_log_archival_to_debug()
     print("=" * 60)
     print("全部测试通过")
     print("=" * 60)

@@ -30,6 +30,7 @@ DIR_LOCATE_LOG = "05_定位记录"
 DIR_KP_SCREENSHOT = "06_知识点截图"
 DIR_Q_SCREENSHOT = "07_题目原题截图"
 DIR_SOLUTION_SCREENSHOT = "08_解题过程截图"
+DIR_RUN_LOG = "09_运行日志"
 
 # 截图 category → 子目录映射
 SCREENSHOT_CATEGORIES = {
@@ -190,3 +191,23 @@ class DebugSink:
         if h > 0:
             return f"{h:02d}h{m:02d}m{s:02d}s"
         return f"{m:02d}m{s:02d}s"
+
+    # === 9. 运行日志归档 ===
+    def attach_log_handler(self) -> bool:
+        """把全局 logger 的 file 输出切换到 debug/{视频名}/09_运行日志/pipeline.log
+
+        - 必须在 set_video_name() 之后调用
+        - 调用后所有 setup_logger 创建的 logger 自动跟随（通过 root logger 共享 file handler）
+        - release 时 debugger=None 不调用，logger 保持 logs/ 默认
+
+        Returns:
+            True 切换成功；False 文件创建失败（保持原 logs/ 输出）
+        """
+        from utils.logger import set_log_file
+        log_path = os.path.join(self._video_dir, DIR_RUN_LOG, "pipeline.log")
+        ok = set_log_file(log_path)
+        if ok:
+            logger.info(f"[debugger] 9.运行日志归档: {log_path}")
+        else:
+            logger.warning(f"[debugger] 运行日志归档失败，保持 logs/ 默认")
+        return ok

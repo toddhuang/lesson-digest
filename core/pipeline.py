@@ -240,10 +240,11 @@ class Pipeline:
         """探测视频信息"""
         from utils.video_probe import probe_video
         context.video_info = probe_video(context.video_path)
-        # debugger 确定视频名（issue #11）
+        # debugger 确定视频名 + 接管运行日志归档（issue #11 第 9 类产物）
         if self.debugger is not None:
             video_name = os.path.splitext(os.path.basename(context.video_path))[0]
             self.debugger.set_video_name(video_name)
+            self.debugger.attach_log_handler()
 
     def _stage_extract_audio(self, context: PipelineContext):
         """提取音轨"""
