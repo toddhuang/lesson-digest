@@ -40,11 +40,25 @@ SYSTEM_PROMPT = """你是一个教学视频内容分析助手。请从以下带�
 """
 
 
+SOLUTION_PROMPT = """你是教学视频解题过程整理助手。请综合以下 ASR 语音文字和 OCR 板书文字，整理出该题目的分步骤解题过程。
+
+【要求】
+1. 综合ASR讲解和OCR板书，分步骤整理解题过程
+2. 每步骤标注开始时间和结束时间（秒，在题目时间范围内）
+3. 公式用LaTeX（如 $f'(x)=2x$），优先采用OCR的LaTeX结果
+4. OCR手写碎片（识别不全的板书）结合ASR上下文由你补全还原
+5. 保持步骤顺序与老师讲解/板书顺序一致
+6. 输出JSON数组，紧凑无缩进、无Markdown代码块：
+[{"step_number":1,"content":"步骤内容","start_time":323.0,"end_time":380.0}]
+"""
+
+
 class ProblemExtractor:
     """题目提取器（OCR补充原题）"""
 
-    def __init__(self, llm: Optional[LLMGenerator] = None):
+    def __init__(self, llm: Optional[LLMGenerator] = None, solution_llm: Optional[LLMGenerator] = None):
         self.llm = llm
+        self.solution_llm = solution_llm or llm
 
     def extract(self, full_text: str, video_duration: float,
                 ocr_results: list = None) -> List[Problem]:
@@ -78,6 +92,112 @@ class ProblemExtractor:
 
         response = self.llm.generate(prompt=SYSTEM_PROMPT, payload=payload)
         return self._parse_response(response.content)
+
+    def enrich_solution(self, problem: Problem, aligned, ocr_results: list = None) -> Problem:
+        """对单个题目，融合 ASR+OCR 整理解题过程（09 设计，issue #13）
+
+        每题目独立调用 LLM：
+        - ASR 片段：题目时间范围内的纠错后文本切片
+        - OCR 片段：该范围内所有帧的文字+公式 LaTeX（不做颜色过滤）
+        - LLM 综合两者，输出结构化解题步骤（含 start_time/end_time）
+
+        Args:
+            problem: 单个题目（含 start_time/end_time/question_text）
+            aligned: AlignedTranscript（纠错后全文 + raw 字级时间戳）
+            ocr_results: 全部 OCR 帧结果，内部按题目时间范围过滤
+
+        Returns:
+            填充了 solution_steps 的 problem
+        """
+        if self.solution_llm is None:
+            logger.warning(f"[M8] 题目{problem.index}未配置 LLM，跳过解题过程整理")
+            return problem
+
+        asr_seg = self._slice_asr_text(aligned, problem.start_time, problem.end_time)
+        ocr_seg = self._slice_ocr_text(ocr_results, problem.start_time, problem.end_time)
+
+        if not asr_seg and not ocr_seg:
+            logger.warning(f"[M8] 题目{problem.index} ASR/OCR 片段均为空，跳过解题过程整理")
+            return problem
+
+        payload = (
+            f"【题目时间范围】{problem.start_time:.1f}s - {problem.end_time:.1f}s\n\n"
+            f"【题目原文】\n{problem.question_text}\n\n"
+            f"【ASR 片段】（老师口头讲解）\n{asr_seg}\n\n"
+            f"【OCR 板书片段】（含公式 LaTeX）\n{ocr_seg}"
+        )
+        response = self.solution_llm.generate(prompt=SOLUTION_PROMPT, payload=payload)
+        steps = self._parse_solution_response(response.content)
+        problem.solution_steps = steps
+        logger.info(f"[M8] 题目{problem.index} 解题过程整理: {len(steps)}步")
+        return problem
+
+    def _slice_asr_text(self, aligned, start_time: float, end_time: float) -> str:
+        """从 aligned.raw 切 [start_time, end_time] 时间范围的 ASR 文本片段"""
+        if aligned is None or aligned.raw is None:
+            return ""
+        char_ts = aligned.raw.char_timestamps
+        if not char_ts:
+            return ""
+        start_idx = None
+        end_idx = None
+        for i, ct in enumerate(char_ts):
+            if ct is None:
+                continue
+            sec = ct.start_ms / 1000.0
+            if start_idx is None and sec >= start_time:
+                start_idx = i
+            if sec <= end_time:
+                end_idx = i
+            elif start_idx is not None:
+                break
+        if start_idx is None:
+            return ""
+        if end_idx is None:
+            end_idx = len(aligned.raw.text) - 1
+        return aligned.raw.text[start_idx:end_idx + 1]
+
+    def _slice_ocr_text(self, ocr_results: list, start_time: float, end_time: float) -> str:
+        """从 ocr_results 过滤时间范围内的帧，拼接文字+公式 LaTeX"""
+        if not ocr_results:
+            return ""
+        parts = []
+        for frame in ocr_results:
+            if frame.timestamp < start_time or frame.timestamp > end_time:
+                continue
+            if getattr(frame, "is_duplicate", False):
+                continue
+            if frame.full_text:
+                parts.append(f"[{frame.timestamp:.0f}s] {frame.full_text}")
+            for r in frame.results:
+                if r.block_type == "formula" and r.latex:
+                    parts.append(f"[公式] ${r.latex}$")
+        return "\n".join(parts)
+
+    def _parse_solution_response(self, content: str) -> List[SolutionStep]:
+        """解析解题过程 LLM 返回的 JSON"""
+        clean = re.sub(r'```json\s*', '', content)
+        clean = re.sub(r'```\s*', '', clean).strip()
+
+        try:
+            data = json.loads(clean)
+        except json.JSONDecodeError as e:
+            raise LLMResponseParseError(f"解题过程JSON解析失败: {e}, 原始内容: {content[:200]}")
+
+        steps = []
+        for item in data:
+            try:
+                step = SolutionStep(
+                    step_number=item.get("step_number", len(steps) + 1),
+                    content=item.get("content", ""),
+                    start_time=float(item.get("start_time", 0.0)),
+                    end_time=float(item.get("end_time", 0.0)),
+                )
+                steps.append(step)
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning(f"[M8] 解析解题步骤失败: {e}, item={item}")
+
+        return steps
 
     def _enrich_with_ocr(self, problems: List[Problem], ocr_results: list) -> List[Problem]:
         """用OCR结果补充原题文字（印刷体比ASR更准确）"""
@@ -226,7 +346,8 @@ class ProblemExtractor:
                     step = SolutionStep(
                         step_number=step_data.get("step_number", len(steps) + 1),
                         content=step_data.get("content", ""),
-                        timestamp=parse_timestamp(step_data.get("timestamp", "00:00")),
+                        start_time=float(step_data.get("start_time", step_data.get("timestamp", 0))),
+                        end_time=float(step_data.get("end_time", step_data.get("start_time", 0))),
                     )
                     steps.append(step)
 
@@ -278,7 +399,7 @@ class ProblemExtractor:
 
         lines.append("## 解题步骤")
         for step in problem.solution_steps:
-            ts = format_timestamp(step.timestamp, timestamp_format)
+            ts = format_timestamp(step.start_time, timestamp_format)
             lines.append(f"{step.step_number}. [{ts}] {step.content}")
         lines.append("")
 

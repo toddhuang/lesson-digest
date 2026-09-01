@@ -47,6 +47,7 @@ STAGES = [
     "asr",
     "ocr",
     "correct_and_extract",
+    "summarize_solution",
     "merge_text",
     "capture_screenshots",
     "generate_mindmap",
@@ -99,8 +100,10 @@ class Pipeline:
             self.llm_client.get_session("asr_correct_and_extract")
         )
         # problem_extractor 保留用于后续 OCR 补充原题（题目段已由 ContentExtractor 提取）
+        # solution_llm 用于解题过程整理（09 设计 issue #13）
         self.problem_extractor = ProblemExtractor(
-            self.llm_client.get_session("problem_extraction")
+            self.llm_client.get_session("problem_extraction"),
+            solution_llm=self.llm_client.get_session("solution_summary"),
         )
         self.mindmap_generator = MindmapGenerator(
             self.llm_client.get_session("mindmap_generation")
@@ -276,13 +279,22 @@ class Pipeline:
             )
             logger.info(f"[Pipeline] 题目去重后: {len(context.problems)}道")
 
+    def _stage_summarize_solution(self, context: PipelineContext):
+        """解题过程整理（ASR+OCR 融合，每题目独立调 LLM，09 设计 issue #13）"""
+        if not context.problems:
+            return
+        for problem in context.problems:
+            self.problem_extractor.enrich_solution(
+                problem, context.corrected_transcript, context.ocr_results
+            )
+
     def _stage_merge_text(self, context: PipelineContext):
         """ASR文本整理（优先使用纠错后文本，OCR不混入全文本）"""
         transcript = context.corrected_transcript or context.asr_results
         context.full_text = self.text_merger.merge(transcript)
 
     def _stage_capture_screenshots(self, context: PipelineContext):
-        """题目截图 + 知识点截图"""
+        """题目截图 + 知识点截图 + 解题过程截图"""
         video_name = os.path.splitext(os.path.basename(context.video_path))[0]
 
         # 题目截图（output，做颜色过滤，供学生看原题）
@@ -296,6 +308,13 @@ class Pipeline:
             kp_dir = os.path.join(self.config.paths.debug_dir, video_name, "06_截图", "知识点")
             context.knowledge_screenshot_paths = self.screenshot_capture.capture_knowledge_screenshots(
                 context.video_path, context.knowledge_points, kp_dir
+            )
+
+        # 解题过程截图（debug，不做颜色过滤，每步骤一帧，issue #13）
+        if context.problems and any(p.solution_steps for p in context.problems):
+            sol_dir = os.path.join(self.config.paths.debug_dir, video_name, "06_截图", "解题过程")
+            context.solution_screenshot_paths = self.screenshot_capture.capture_solution_screenshots(
+                context.video_path, context.problems, sol_dir
             )
 
     def _stage_generate_mindmap(self, context: PipelineContext):

@@ -60,6 +60,13 @@ class MockLLMAdapter(LLMAdapter):
                 ],
             }, ensure_ascii=False)
 
+        # 解题过程整理（09 设计 issue #13，ASR+OCR 融合）
+        if "解题过程整理助手" in prompt:
+            return json.dumps([
+                {"step_number": 1, "content": "因式分解：$x^2-5x+6=(x-2)(x-3)$", "start_time": 20.0, "end_time": 28.0},
+                {"step_number": 2, "content": "令$(x-2)(x-3)=0$，得 $x=2$ 或 $x=3$", "start_time": 28.0, "end_time": 35.0},
+            ], ensure_ascii=False)
+
         if "思维导图" in prompt or "OPML" in prompt:
             return '''<?xml version="1.0" encoding="UTF-8"?>
 <opml version="2.0">
@@ -95,8 +102,8 @@ class MockLLMAdapter(LLMAdapter):
                     "end_time": "00:35",
                     "question_text": "解方程：x²-5x+6=0",
                     "solution_steps": [
-                        {"step_number": 1, "content": "因式分解：x²-5x+6=(x-2)(x-3)", "timestamp": "00:28"},
-                        {"step_number": 2, "content": "令(x-2)(x-3)=0，得x=2或x=3", "timestamp": "00:32"},
+                        {"step_number": 1, "content": "因式分解：x²-5x+6=(x-2)(x-3)", "start_time": 28.0, "end_time": 32.0},
+                        {"step_number": 2, "content": "令(x-2)(x-3)=0，得x=2或x=3", "start_time": 32.0, "end_time": 35.0},
                     ],
                     "has_image": False,
                     "image_description": "",

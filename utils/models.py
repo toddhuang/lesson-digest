@@ -193,10 +193,11 @@ class KnowledgePoint:
 
 @dataclass
 class SolutionStep:
-    """解题步骤，属于 Problem 的子结构"""
+    """解题步骤，属于 Problem 的子结构（09 设计：扩展 start_time/end_time 用于截图定位）"""
     step_number: int = 0
     content: str = ""
-    timestamp: float = 0.0
+    start_time: float = 0.0
+    end_time: float = 0.0
 
 
 @dataclass
@@ -284,6 +285,7 @@ class PipelineContext:
     problems: Optional[List[Problem]] = None
     screenshot_paths: Optional[List[str]] = None
     knowledge_screenshot_paths: Optional[List[str]] = None
+    solution_screenshot_paths: Optional[List[str]] = None
     mindmap_opml: Optional[str] = None
     output_files: Optional[OutputFiles] = None
     completed_stages: List[str] = field(default_factory=list)

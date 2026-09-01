@@ -103,6 +103,46 @@ class ScreenshotCapture:
         logger.info(f"[M9] 知识点截图完成: {len([p for p in screenshot_paths if p])}/{len(knowledge_points)}成功")
         return screenshot_paths
 
+    def capture_solution_screenshots(
+        self,
+        video_path: str,
+        problems: List[Problem],
+        output_dir: str,
+    ) -> List[str]:
+        """为每个解题步骤截取画面（debug 用，不做颜色过滤）
+
+        遍历 problems × solution_steps，每步骤截一帧（用 step.start_time）。
+        文件名格式：题目01_步骤01_t=05m23s.jpg（issue #13）
+
+        Args:
+            video_path: 视频文件路径
+            problems: 题目列表（含 solution_steps）
+            output_dir: 截图输出目录
+
+        Returns:
+            截图路径列表（扁平，失败的为 None）
+        """
+        total_steps = sum(len(p.solution_steps) for p in problems)
+        logger.info(f"[M9] 解题过程截图: {len(problems)}题/{total_steps}步 -> {output_dir}")
+        ensure_dir(output_dir)
+
+        screenshot_paths = []
+        for problem in problems:
+            for step in problem.solution_steps:
+                try:
+                    ts = self._format_t(step.start_time)
+                    filename = f"题目{problem.index:02d}_步骤{step.step_number:02d}_t={ts}.jpg"
+                    output_path = os.path.join(output_dir, filename)
+                    self.frame_extractor.extract_frame_at(video_path, step.start_time, output_path)
+                    screenshot_paths.append(output_path)
+                    logger.info(f"[M9] 题目{problem.index:02d}步骤{step.step_number:02d}截图: t={step.start_time}s -> {output_path}")
+                except (InvalidVideoError, TimestampOutOfRangeError, FFmpegError, FileNotFoundError, OSError) as e:
+                    logger.warning(f"[M9] 题目{problem.index:02d}步骤{step.step_number:02d}截图失败: {e}")
+                    screenshot_paths.append(None)
+
+        logger.info(f"[M9] 解题过程截图完成: {len([p for p in screenshot_paths if p])}/{total_steps}成功")
+        return screenshot_paths
+
     @staticmethod
     def _format_t(seconds: float) -> str:
         """秒数转文件名时间戳格式：05m23s 或 01h05m23s"""
