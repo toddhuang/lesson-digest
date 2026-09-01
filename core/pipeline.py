@@ -28,7 +28,7 @@ from core.frame_extractor import FrameExtractor
 from core.asr import ASRRecognizer
 from core.ocr import OCRRecognizer
 from core.text_merger import TextMerger
-from core.knowledge_extractor import KnowledgeExtractor
+from core.content_extractor import ContentExtractor
 from core.problem_extractor import ProblemExtractor
 from core.screenshot_capture import ScreenshotCapture
 from core.mindmap_generator import MindmapGenerator
@@ -38,16 +38,16 @@ from core.output_assembler import OutputAssembler
 logger = setup_logger("M13_pipeline")
 
 # 阶段列表
+# AGENTS.md 约定：一次 LLM 调用返回三样东西（纠错全文+知识点段+题目段）
+# correct_and_extract 合并了原 correct_asr + extract_knowledge + extract_problems
 STAGES = [
     "probe",
     "extract_audio",
     "extract_frames",
     "asr",
     "ocr",
-    "correct_asr",
+    "correct_and_extract",
     "merge_text",
-    "extract_knowledge",
-    "extract_problems",
     "capture_screenshots",
     "generate_mindmap",
     "assemble_output",
@@ -68,9 +68,11 @@ class Pipeline:
             channels=config.asr.channels,
         )
         self.frame_extractor = FrameExtractor(
-            interval=config.video.frame_interval,
+            interval=config.frame_dedup.interval_sec,
             fmt=config.video.frame_format,
             quality=config.video.frame_quality,
+            dedup_threshold=config.frame_dedup.threshold,
+            enable_dedup=True,
         )
         self.asr_recognizer = ASRRecognizer(
             adapter_type=config.asr.adapter_type,
@@ -87,14 +89,16 @@ class Pipeline:
         self.output_assembler = OutputAssembler(config.output)
 
         # 初始化 LLM 客户端和各业务模块
+        # AGENTS.md 约定：一次 LLM 调用返回三样东西（纠错全文+知识点段+题目段）
         self.llm_client = LLMClient(
             llm_config=config.llm,
             tasks=config.tasks,
             mock=mock_llm,
         )
-        self.knowledge_extractor = KnowledgeExtractor(
-            self.llm_client.get_session("knowledge_extraction")
+        self.content_extractor = ContentExtractor(
+            self.llm_client.get_session("asr_correct_and_extract")
         )
+        # problem_extractor 保留用于后续 OCR 补充原题（题目段已由 ContentExtractor 提取）
         self.problem_extractor = ProblemExtractor(
             self.llm_client.get_session("problem_extraction")
         )
@@ -134,10 +138,8 @@ class Pipeline:
             self._run_stage("extract_frames", context, force)
             self._run_stage("asr", context, force)
             self._run_stage("ocr", context, force)
-            self._run_stage("correct_asr", context, force)
+            self._run_stage("correct_and_extract", context, force)
             self._run_stage("merge_text", context, force)
-            self._run_stage("extract_knowledge", context, force)
-            self._run_stage("extract_problems", context, force)
             self._run_stage("capture_screenshots", context, force)
             self._run_stage("generate_mindmap", context, force)
             self._run_stage("assemble_output", context, force, output_dir=output_dir)
@@ -182,14 +184,10 @@ class Pipeline:
                 self._stage_asr(context, force)
             elif stage == "ocr":
                 self._stage_ocr(context, force)
-            elif stage == "correct_asr":
-                self._stage_correct_asr(context)
+            elif stage == "correct_and_extract":
+                self._stage_correct_and_extract(context)
             elif stage == "merge_text":
                 self._stage_merge_text(context)
-            elif stage == "extract_knowledge":
-                self._stage_extract_knowledge(context)
-            elif stage == "extract_problems":
-                self._stage_extract_problems(context)
             elif stage == "capture_screenshots":
                 self._stage_capture_screenshots(context)
             elif stage == "generate_mindmap":
@@ -235,37 +233,53 @@ class Pipeline:
             context.frame_paths, context.frame_timestamps, use_cache=not force
         )
 
-    def _stage_correct_asr(self, context: PipelineContext):
-        """ASR纠错（纠错后存入 context.corrected_transcript，后续模块基于纠错后文本）"""
+    def _stage_correct_and_extract(self, context: PipelineContext):
+        """一次 LLM 调用完成 ASR 纠错 + 知识点段 + 题目段提取
+
+        AGENTS.md 约定：一次 LLM 调用返回三样东西（纠错全文+知识点段+题目段），
+        不做三次独立调用。ContentExtractor 一次调用返回：
+        - AlignedTranscript（纠错后文本 + 字级时间戳对齐映射）
+        - List[KnowledgePoint]（知识点列表，通过文字段定位时间戳）
+        - List[Problem]（题目列表，通过文字段定位时间戳）
+
+        后续用 problem_extractor 的 OCR 补充和去重方法做后处理。
+        """
         if not context.asr_results:
-            logger.warning("[Pipeline] ASR结果为空，跳过纠错")
+            logger.warning("[Pipeline] ASR结果为空，跳过纠错和提取")
             return
 
         try:
-            from utils.asr_corrector import ASRCorrector
-            corrector = ASRCorrector(self.llm_client.get_session("asr_correction"))
-            context.corrected_transcript = corrector.correct(context.asr_results)
-            logger.info("[Pipeline] ASR纠错完成")
+            aligned, knowledge_points, problems = self.content_extractor.extract(
+                context.asr_results
+            )
+            context.corrected_transcript = aligned
+            context.knowledge_points = knowledge_points
+            context.problems = problems
+            logger.info(
+                f"[Pipeline] 一次LLM调用完成: 纠错{len(aligned.text)}字, "
+                f"知识点{len(knowledge_points)}个, 题目{len(problems)}道"
+            )
         except LLMError as e:
-            logger.error(f"[Pipeline] ASR纠错失败 ({type(e).__name__})，使用原始逐字稿: {e}")
+            logger.error(
+                f"[Pipeline] 纠错+提取失败 ({type(e).__name__})，使用原始逐字稿: {e}"
+            )
+            return
+
+        # OCR 补充原题和去重（复用 ProblemExtractor 的后处理逻辑）
+        if context.ocr_results and context.problems:
+            context.problems = self.problem_extractor._enrich_with_ocr(
+                context.problems, context.ocr_results
+            )
+        if len(context.problems) > 1:
+            context.problems = self.problem_extractor._merge_problems(
+                context.problems
+            )
+            logger.info(f"[Pipeline] 题目去重后: {len(context.problems)}道")
 
     def _stage_merge_text(self, context: PipelineContext):
         """ASR文本整理（优先使用纠错后文本，OCR不混入全文本）"""
         transcript = context.corrected_transcript or context.asr_results
         context.full_text = self.text_merger.merge(transcript)
-
-    def _stage_extract_knowledge(self, context: PipelineContext):
-        """知识点提取"""
-        context.knowledge_points = self.knowledge_extractor.extract(
-            context.full_text, context.video_info.duration
-        )
-
-    def _stage_extract_problems(self, context: PipelineContext):
-        """题目提取"""
-        context.problems = self.problem_extractor.extract(
-            context.full_text, context.video_info.duration,
-            ocr_results=context.ocr_results
-        )
 
     def _stage_capture_screenshots(self, context: PipelineContext):
         """题目截图"""

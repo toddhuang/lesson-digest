@@ -38,16 +38,15 @@ llm:
       litellm_prefix: "openai"
 
 # 任务-模型映射：每个任务指定使用的模型和 temperature
+# AGENTS.md 约定：一次 LLM 调用返回三样东西（纠错全文+知识点段+题目段），
+#   asr_correct_and_extract 合并了原 asr_correction + knowledge_extraction + problem_extraction 的提取调用
 # temperature 说明：
-#   0.0 - 精确提取（题目提取），输出最确定
-#   0.1 - ASR纠错、知识点提取，需要准确性
+#   0.1 - ASR纠错+知识点段+题目段一次性提取，需要准确性
+#   0.0 - 题目原题提取（基于题目段+OCR），输出最确定
 #   0.2 - 解题过程整理，适度灵活
 #   0.3 - 知识点总结、思维导图，需要一定创造性
 tasks:
-  asr_correction:
-    model: doubao-seed-2-1-pro-260628
-    temperature: 0.1
-  knowledge_extraction:
+  asr_correct_and_extract:
     model: doubao-seed-2-1-pro-260628
     temperature: 0.1
   problem_extraction:

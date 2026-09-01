@@ -48,6 +48,18 @@ class MockLLMAdapter(LLMAdapter):
 
     def _generate_mock_response(self, prompt: str, payload: str) -> str:
         """根据任务类型生成模拟响应"""
+        # 一次性纠错+知识点段+题目段提取（AGENTS.md 约定的合并调用）
+        if "corrected_text" in prompt or "一次完成" in prompt:
+            return json.dumps({
+                "corrected_text": payload,
+                "knowledge_segments": [
+                    {"name": "二次函数的图像性质", "segment": payload[:min(20, len(payload))]},
+                ],
+                "problem_segments": [
+                    {"segment": payload[:min(15, len(payload))]},
+                ],
+            }, ensure_ascii=False)
+
         if "思维导图" in prompt or "OPML" in prompt:
             return '''<?xml version="1.0" encoding="UTF-8"?>
 <opml version="2.0">
