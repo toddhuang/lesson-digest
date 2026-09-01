@@ -61,6 +61,7 @@
 - **禁止裸 `try except Exception as e`**：仔细阅读第三方 API 文档，对不同异常类型分别处理（参数错误不重试、认证失败不重试、限流指数退避、服务端错误延迟重试、超时改流式）
 - **禁止硬编码**：model 名称、API endpoint、超时时间、阈值等必须从配置文件读取，不得写死在代码中
 - **adapter 模式**：ASR/OCR/LLM 均通过适配层隔离第三方库，底层变化不影响核心业务逻辑
+- **临时验证脚本统一放 scripts/**：所有一次性验证脚本（API 连通性测试、引擎输出对比、模型能力验证、issue 验收测试等）统一放 `scripts/` 目录，**禁止放 `tests/`**。`tests/` 目录不作验证脚本存放用途。脚本内用 `ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))` 计算项目根，保证移动后 import 不受影响
 
 ### 安全规范
 
