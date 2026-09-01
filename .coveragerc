@@ -1,0 +1,21 @@
+[run]
+source = .
+omit =
+    # 不统计测试代码本身的覆盖率
+    tests/*
+    scripts/*
+    # 不统计第三方库
+    .venv/*
+    venv/*
+    # 不统计 __init__.py（空文件）
+    */__init__.py
+    # 不统计 setup 工具
+    setup.py
+    setup_cudnn.py
+
+[report]
+# 排除外部的第三方目录
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:

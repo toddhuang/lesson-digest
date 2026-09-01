@@ -19,8 +19,12 @@ temp/
 output/
 debug/
 
-# 测试文件
+# 测试文件（.py 入库，素材 .mp4/.png/.txt 仍 ignore）
 tests/*
+!tests/*.py
+!tests/conftest.py
+!tests/*/
+!tests/**/*.py
 
 # 配置文件（含 API Key，不入库；模板 config.example.yaml 入库）
 config.yaml

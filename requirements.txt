@@ -40,6 +40,10 @@ litellm>=1.98.0
 tqdm>=4.60
 psutil>=5.9
 
+# === 测试（unit test）===
+pytest>=8.0
+pytest-cov>=5.0
+
 # ============================================================
 # !! 重要：安装完成后必须运行 cudnn 统一脚本（否则 torch 与 paddle
 #    同名 cudnn DLL 版本不同会导致 WinError 127 崩溃）!!
