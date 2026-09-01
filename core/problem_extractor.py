@@ -362,10 +362,10 @@ class ProblemExtractor:
 
         return results
 
-    def to_question_markdown(self, problem: Problem, screenshot_rel: str = None,
-                              timestamp_format: str = "mm:ss") -> str:
-        """将题目转换为原题 Markdown 格式"""
-        lines = [f"# 题目 {problem.index:02d} - 原题\n"]
+    def to_problem_markdown(self, problem: Problem, screenshot_rel: str = None,
+                            timestamp_format: str = "mm:ss") -> str:
+        """将题目转换为合并 Markdown 格式（原题+解析合一份文件）"""
+        lines = [f"# 题目 {problem.index:02d}\n"]
         lines.append(f"> 时间范围：[{format_timestamp(problem.start_time, timestamp_format)} - {format_timestamp(problem.end_time, timestamp_format)}]")
         if problem.source:
             lines.append(f"> 来源：{problem.source}")
@@ -376,25 +376,14 @@ class ProblemExtractor:
             lines.append("")
 
         lines.append("## 原题")
-        lines.append(problem.question_text)
+        lines.append(problem.question_text or "（待提取）")
         lines.append("")
 
-        return "\n".join(lines)
-
-    def to_solution_markdown(self, problem: Problem, timestamp_format: str = "mm:ss") -> str:
-        """将题目转换为解析 Markdown 格式"""
-        lines = [f"# 题目 {problem.index:02d} - 解析\n"]
-        lines.append(f"> 时间范围：[{format_timestamp(problem.start_time, timestamp_format)} - {format_timestamp(problem.end_time, timestamp_format)}]")
-        lines.append("")
-
-        lines.append("## 原题")
-        lines.append(problem.question_text)
-        lines.append("")
-
-        lines.append("## 解题步骤")
-        for step in problem.solution_steps:
-            ts = format_timestamp(step.start_time, timestamp_format)
-            lines.append(f"{step.step_number}. [{ts}] {step.content}")
-        lines.append("")
+        if problem.solution_steps:
+            lines.append("## 解题步骤")
+            for step in problem.solution_steps:
+                ts = format_timestamp(step.start_time, timestamp_format)
+                lines.append(f"{step.step_number}. [{ts}] {step.content}")
+            lines.append("")
 
         return "\n".join(lines)

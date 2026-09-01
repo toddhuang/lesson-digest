@@ -91,14 +91,28 @@ class OutputAssembler:
         save_text("\n".join(lines), output_path)
 
     def _write_knowledge_list(self, result: ProcessResult, output_path: str) -> None:
-        """写知识点清单"""
+        """写知识点清单（含深度整理：核心内容 + 补充内容）"""
         lines = ["# 知识点清单\n"]
         lines.append(f"> 视频：{os.path.basename(result.video_path)}")
         lines.append(f"> 知识点数量：{len(result.knowledge_points)}\n")
 
         for kp in result.knowledge_points:
             ts = format_timestamp(kp.start_time, self.config.timestamp_format)
-            lines.append(f"{kp.index}. {kp.name} [{ts}]")
+            if kp.end_time:
+                ts_end = format_timestamp(kp.end_time, self.config.timestamp_format)
+                lines.append(f"## {kp.index}. {kp.name} [{ts} - {ts_end}]\n")
+            else:
+                lines.append(f"## {kp.index}. {kp.name} [{ts}]\n")
+
+            if kp.content:
+                lines.append("### 核心内容")
+                lines.append(kp.content)
+                lines.append("")
+
+            if kp.supplement:
+                lines.append("### 补充内容（高考范围内）")
+                lines.append(kp.supplement)
+                lines.append("")
 
         save_text("\n".join(lines), output_path)
         logger.info(f"[M12] 知识点清单: {output_path}")
@@ -110,22 +124,18 @@ class OutputAssembler:
 
     def _write_problems(self, result: ProcessResult, problems_dir: str,
                          screenshots_dir: str) -> List[str]:
-        """写习题文件"""
+        """写习题文件（原题+解析合并为单文件 题目NN.md）"""
         from core.problem_extractor import ProblemExtractor
 
-        # 创建一个临时的 ProblemExtractor 用于格式化（不需要 LLM）
         formatter = ProblemExtractor(llm=None)
         problem_files = []
 
         for i, problem in enumerate(result.problems):
-            # 原题文件
-            question_filename = f"题目{problem.index:02d}_原题.md"
-            question_path = os.path.join(problems_dir, question_filename)
+            filename = f"题目{problem.index:02d}.md"
+            path = os.path.join(problems_dir, filename)
 
-            # 截图相对路径
             screenshot_rel = None
             if i < len(result.screenshot_paths) and result.screenshot_paths[i]:
-                # 复制截图到截图目录（mock阶段截图已经在目标位置）
                 screenshot_src = result.screenshot_paths[i]
                 screenshot_dst = os.path.join(screenshots_dir, f"题目{problem.index:02d}.jpg")
                 if os.path.exists(screenshot_src) and screenshot_src != screenshot_dst:
@@ -133,15 +143,8 @@ class OutputAssembler:
                     shutil.copy2(screenshot_src, screenshot_dst)
                 screenshot_rel = f"../{self.config.screenshots_dirname}/题目{problem.index:02d}.jpg"
 
-            question_md = formatter.to_question_markdown(problem, screenshot_rel, self.config.timestamp_format)
-            save_text(question_md, question_path)
-            problem_files.append(question_path)
-
-            # 解析文件
-            solution_filename = f"题目{problem.index:02d}_解析.md"
-            solution_path = os.path.join(problems_dir, solution_filename)
-            solution_md = formatter.to_solution_markdown(problem, self.config.timestamp_format)
-            save_text(solution_md, solution_path)
-            problem_files.append(solution_path)
+            md = formatter.to_problem_markdown(problem, screenshot_rel, self.config.timestamp_format)
+            save_text(md, path)
+            problem_files.append(path)
 
         return problem_files
