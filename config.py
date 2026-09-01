@@ -138,6 +138,18 @@ class CacheConfig:
 
 
 @dataclass
+class DebugConfig:
+    """Debug 模块配置（issue #11）
+    - enabled: release 时改 false + 删除 debugger/ 包，pipeline 不受影响
+    - max_size_gb: debug 目录大小上限（防累积，pipeline 启动时检查）
+    - save_intermediate: 是否保存中间产物（False 时只保存最终产物）
+    """
+    enabled: bool = True
+    max_size_gb: float = 50.0
+    save_intermediate: bool = True
+
+
+@dataclass
 class Config:
     """全局配置根对象"""
     video: VideoConfig = field(default_factory=VideoConfig)
@@ -151,6 +163,7 @@ class Config:
     output: OutputConfig = field(default_factory=OutputConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
+    debug: DebugConfig = field(default_factory=DebugConfig)
 
 
 # === 配置管理器 ===
@@ -244,6 +257,11 @@ class ConfigManager:
             for k, v in data["cache"].items():
                 if hasattr(self.config.cache, k):
                     setattr(self.config.cache, k, v)
+
+        if "debug" in data and isinstance(data["debug"], dict):
+            for k, v in data["debug"].items():
+                if hasattr(self.config.debug, k):
+                    setattr(self.config.debug, k, v)
 
     def _apply_llm_config(self, llm_data: dict) -> None:
         """解析 LLM 配置段"""

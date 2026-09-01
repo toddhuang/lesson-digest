@@ -9,7 +9,11 @@ def format_timestamp(seconds: float, fmt: str = "mm:ss") -> str:
 
     Args:
         seconds: 秒数
-        fmt: 格式，"mm:ss" 或 "hh:mm:ss"
+        fmt: 格式：
+            "mm:ss" → 分:秒
+            "mm:ss.cc" → 分:秒.百分秒（debug 字级时间戳用）
+            "hh:mm:ss" → 时:分:秒
+            "hh:mm:ss.cc" → 时:分:秒.百分秒
 
     Returns:
         格式化后的时间戳字符串
@@ -20,10 +24,20 @@ def format_timestamp(seconds: float, fmt: str = "mm:ss") -> str:
     hours = total_sec // 3600
     minutes = (total_sec % 3600) // 60
     secs = total_sec % 60
+    centi = int(round((seconds - total_sec) * 100))
+    if centi >= 100:
+        centi = 99
 
-    if fmt == "hh:mm:ss" or hours > 0:
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
+    show_centi = ".cc" in fmt
+    show_hours = "hh:" in fmt or hours > 0
+
+    if show_hours:
+        base = f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    else:
+        base = f"{minutes:02d}:{secs:02d}"
+    if show_centi:
+        base = f"{base}.{centi:02d}"
+    return base
 
 
 def parse_timestamp(ts_str: str) -> float:

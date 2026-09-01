@@ -106,3 +106,12 @@ paths:
 cache:
   cache_ocr_frames: true
   max_cache_size_gb: 400
+
+# Debug 模块配置（issue #11）
+# - enabled: release 时改 false + 删除 debugger/ 包，pipeline 不受影响（无 import 依赖）
+# - max_size_gb: debug 目录大小上限（防累积）
+# - save_intermediate: 是否保存中间产物（false 时只保存最终产物）
+debug:
+  enabled: true
+  max_size_gb: 50
+  save_intermediate: true

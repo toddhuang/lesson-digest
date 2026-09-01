@@ -19,7 +19,7 @@ AGENTS.md 约定：一次 LLM 调用返回三样东西——
 import difflib
 import json
 import re
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from utils.models import (
     RawTranscript, AlignedTranscript,
@@ -73,8 +73,14 @@ class ContentExtractor:
     MIN_SEGMENT_LEN = 10            # 文字段最短定位长度
     KEYWORD_MIN_LEN = 2             # 关键词最短长度（连续中文/数字/字母）
 
-    def __init__(self, llm: LLMGenerator):
+    def __init__(self, llm: LLMGenerator, debugger: Optional[Any] = None):
+        """
+        Args:
+            llm: LLM 生成器（实现 LLMGenerator 协议）
+            debugger: 可选 DebugSink 实例（issue #11），注入后 _locate_segment 每次定位调 save_locate_record
+        """
         self.llm = llm
+        self.debugger = debugger
 
     def extract(
         self,
@@ -207,6 +213,7 @@ class ContentExtractor:
         """
         if not segment_text or len(segment_text) < self.MIN_SEGMENT_LEN:
             logger.warning(f"[ContentExtractor] 文字段过短({len(segment_text)}字)，跳过定位")
+            self._record_locate(segment_text, "failed_short", 0.0, 0.0, 0.0, -1, -1)
             return 0.0, 0.0, -1, -1
 
         # 策略1：精确子串匹配（confidence=1.0 >= 0.70）
@@ -219,6 +226,8 @@ class ContentExtractor:
                 f"[ContentExtractor] 精确匹配: idx[{start_idx}:{end_idx}], "
                 f"time[{start_time:.2f}:{end_time:.2f}], confidence=1.00"
             )
+            self._record_locate(segment_text, "exact", 1.0,
+                                 start_time, end_time, start_idx, end_idx)
             return start_time, end_time, start_idx, end_idx
 
         # 策略2/3：difflib 模糊匹配 + 阈值阶梯
@@ -233,8 +242,10 @@ class ContentExtractor:
             confidence = match.size / len(segment_text)
             if confidence >= self.MATCH_THRESHOLD_MEDIUM:
                 level = "中阈值"
+                strategy = "medium"
             elif confidence >= self.MATCH_THRESHOLD_LOW:
                 level = "低阈值(警告)"
+                strategy = "low"
                 logger.warning(
                     f"[ContentExtractor] 文字段定位置信度低({confidence:.2f})，"
                     f"匹配{match.size}/{len(segment_text)}字"
@@ -254,10 +265,27 @@ class ContentExtractor:
                 f"[ContentExtractor] {level}匹配: idx[{start_idx}:{end_idx}], "
                 f"time[{start_time:.2f}:{end_time:.2f}], confidence={confidence:.2f}"
             )
+            self._record_locate(segment_text, strategy, confidence,
+                                 start_time, end_time, start_idx, end_idx)
             return start_time, end_time, start_idx, end_idx
 
         # difflib 匹配长度=0，关键词兜底
         return self._locate_by_keywords(segment_text, aligned, search_start)
+
+    def _record_locate(
+        self,
+        segment_text: str, strategy: str, confidence: float,
+        start_time: float, end_time: float,
+        start_idx: int, end_idx: int, keyword: str = "",
+    ) -> None:
+        """记录一次定位到 debugger（issue #11 第 5 类产物）"""
+        if self.debugger is None:
+            return
+        self.debugger.save_locate_record(
+            segment_text=segment_text, strategy=strategy, confidence=confidence,
+            start_time=start_time, end_time=end_time,
+            start_idx=start_idx, end_idx=end_idx, keyword=keyword,
+        )
 
     def _extract_keywords(self, segment_text: str) -> List[str]:
         """从文字段提取特征词，用于关键词兜底定位
@@ -322,6 +350,7 @@ class ContentExtractor:
                 f"[ContentExtractor] 关键词兜底失败：segment 无特征词，"
                 f"segment={segment_text[:30]}..."
             )
+            self._record_locate(segment_text, "failed_no_keyword", 0.0, 0.0, 0.0, -1, -1)
             return 0.0, 0.0, -1, -1
 
         for kw in keywords:
@@ -334,12 +363,15 @@ class ContentExtractor:
                     f"[ContentExtractor] 关键词兜底命中: '{kw}' @ idx[{start_idx}], "
                     f"time[{start_time:.2f}:{end_time:.2f}]"
                 )
+                self._record_locate(segment_text, "keyword", 0.0,
+                                     start_time, end_time, start_idx, end_idx, keyword=kw)
                 return start_time, end_time, start_idx, end_idx
 
         logger.warning(
             f"[ContentExtractor] 关键词兜底失败：{len(keywords)} 个特征词均未命中，"
             f"segment={segment_text[:30]}..."
         )
+        self._record_locate(segment_text, "failed_keyword_miss", 0.0, 0.0, 0.0, -1, -1)
         return 0.0, 0.0, -1, -1
 
     def _locate_knowledge_points(

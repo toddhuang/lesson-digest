@@ -8,12 +8,17 @@ M11-M17 重构：
 - pipeline 层负责为每个任务创建 LLMSession 并注入业务模块
 - 删除 LLM 层缓存（use_cache），缓存由 pipeline 层统一管理
 - ASR 纠错不再传 backend，由任务配置决定模型
+
+issue #11（debug 模块）：
+- 接收可选 debugger 实例（duck typing，无 Protocol 约束）
+- 各 _stage_xxx 内调 debugger.save_xxx() 输出 debug 产物
+- release 时 config.debug.enabled=false + 删除 debugger/ 包，pipeline 无 import 依赖不崩
 """
 
 import os
 import time
 import traceback
-from typing import Optional
+from typing import Any, Optional
 
 from config import Config
 from utils.models import (
@@ -60,8 +65,17 @@ STAGES = [
 class Pipeline:
     """主流程编排器"""
 
-    def __init__(self, config: Config, mock_llm: bool = False):
+    def __init__(self, config: Config, mock_llm: bool = False,
+                debugger: Optional[Any] = None):
+        """
+        Args:
+            config: 全局配置
+            mock_llm: 是否使用 mock LLM（链路测试用）
+            debugger: 可选 DebugSink 实例（issue #11），None 时跳过所有 debug 输出。
+                      duck typing，无 Protocol 约束，release 时删除 debugger/ 包不影响本类导入。
+        """
         self.config = config
+        self.debugger = debugger
         self._progress = PipelineProgress(total_stages=len(STAGES))
         self._cancelled = False
 
@@ -98,8 +112,10 @@ class Pipeline:
             tasks=config.tasks,
             mock=mock_llm,
         )
+        # content_extractor 注入 debugger，_locate_segment 每次定位调 save_locate_record（issue #11）
         self.content_extractor = ContentExtractor(
-            self.llm_client.get_session("asr_correct_and_extract")
+            self.llm_client.get_session("asr_correct_and_extract"),
+            debugger=debugger,
         )
         # problem_extractor 保留用于后续 OCR 补充原题（题目段已由 ContentExtractor 提取）
         # solution_llm 用于解题过程整理（09 设计 issue #13）
@@ -224,6 +240,10 @@ class Pipeline:
         """探测视频信息"""
         from utils.video_probe import probe_video
         context.video_info = probe_video(context.video_path)
+        # debugger 确定视频名（issue #11）
+        if self.debugger is not None:
+            video_name = os.path.splitext(os.path.basename(context.video_path))[0]
+            self.debugger.set_video_name(video_name)
 
     def _stage_extract_audio(self, context: PipelineContext):
         """提取音轨"""
@@ -242,6 +262,9 @@ class Pipeline:
     def _stage_asr(self, context: PipelineContext, force: bool):
         """语音识别"""
         context.asr_results = self.asr_recognizer.recognize(context.audio_path, use_cache=not force)
+        # 1. ASR 原始逐字稿（issue #11 第 1 类产物）
+        if self.debugger is not None and context.asr_results is not None:
+            self.debugger.save_asr_raw(context.asr_results)
 
     def _stage_ocr(self, context: PipelineContext, force: bool):
         """文字识别"""
@@ -275,6 +298,11 @@ class Pipeline:
                 f"[Pipeline] 一次LLM调用完成: 纠错{len(aligned.text)}字, "
                 f"知识点{len(knowledge_points)}个, 题目{len(problems)}道"
             )
+            # 2/3/4. 纠错后全文 + 知识点段 + 题目段（issue #11）
+            if self.debugger is not None:
+                self.debugger.save_corrected_text(aligned)
+                self.debugger.save_knowledge_segments(knowledge_points)
+                self.debugger.save_problem_segments(problems)
         except LLMError as e:
             logger.error(
                 f"[Pipeline] 纠错+提取失败 ({type(e).__name__})，使用原始逐字稿: {e}"
@@ -316,25 +344,32 @@ class Pipeline:
         context.full_text = self.text_merger.merge(transcript)
 
     def _stage_capture_screenshots(self, context: PipelineContext):
-        """题目截图 + 知识点截图 + 解题过程截图"""
+        """题目截图 + 知识点截图 + 解题过程截图
+
+        issue #11 目录迁移：
+        - 06_知识点截图/（原 06_截图/知识点/）
+        - 07_题目原题截图/（原 output/截图/，现统一到 debug，不颜色过滤）
+        - 08_解题过程截图/（原 06_截图/解题过程/）
+        output_assembler 后续从 debug/07/ 复制到 output/截图/ 给学生看
+        """
         video_name = os.path.splitext(os.path.basename(context.video_path))[0]
 
-        # 题目截图（output，做颜色过滤，供学生看原题）
-        screenshots_dir = os.path.join(self.config.paths.output_dir, video_name, self.config.output.screenshots_dirname)
+        # 题目原题截图（debug/07_题目原题截图/，不做颜色过滤，issue #11）
+        q_dir = os.path.join(self.config.paths.debug_dir, video_name, "07_题目原题截图")
         context.screenshot_paths = self.screenshot_capture.capture_screenshots(
-            context.video_path, context.problems, screenshots_dir
+            context.video_path, context.problems, q_dir, enable_color_filter=False
         )
 
-        # 知识点截图（debug，不做颜色过滤，issue #12）
+        # 知识点截图（debug/06_知识点截图/，issue #12）
         if context.knowledge_points:
-            kp_dir = os.path.join(self.config.paths.debug_dir, video_name, "06_截图", "知识点")
+            kp_dir = os.path.join(self.config.paths.debug_dir, video_name, "06_知识点截图")
             context.knowledge_screenshot_paths = self.screenshot_capture.capture_knowledge_screenshots(
                 context.video_path, context.knowledge_points, kp_dir
             )
 
-        # 解题过程截图（debug，不做颜色过滤，每步骤一帧，issue #13）
+        # 解题过程截图（debug/08_解题过程截图/，issue #13）
         if context.problems and any(p.solution_steps for p in context.problems):
-            sol_dir = os.path.join(self.config.paths.debug_dir, video_name, "06_截图", "解题过程")
+            sol_dir = os.path.join(self.config.paths.debug_dir, video_name, "08_解题过程截图")
             context.solution_screenshot_paths = self.screenshot_capture.capture_solution_screenshots(
                 context.video_path, context.problems, sol_dir
             )
