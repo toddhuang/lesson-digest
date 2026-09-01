@@ -67,6 +67,12 @@ class ContentExtractor:
     AGENTS.md 约定：一次 LLM 调用返回三样东西，不做三次独立调用。
     """
 
+    # 降阈值阶梯参数（issue #10 要求 6）
+    MATCH_THRESHOLD_MEDIUM = 0.50  # difflib 模糊匹配接受阈值
+    MATCH_THRESHOLD_LOW = 0.30     # difflib 模糊匹配最低接受阈值（带 warning）
+    MIN_SEGMENT_LEN = 10            # 文字段最短定位长度
+    KEYWORD_MIN_LEN = 2             # 关键词最短长度（连续中文/数字/字母）
+
     def __init__(self, llm: LLMGenerator):
         self.llm = llm
 
@@ -184,9 +190,11 @@ class ContentExtractor:
     ) -> Tuple[float, float, int, int]:
         """在 aligned.text 中定位 segment_text 的起止位置和时间戳
 
-        基础版定位算法：用 difflib.find_longest_match 在 aligned.text 中查找
-        segment_text 的最佳匹配位置。后续可按 08_文字对比定位核心算法.md
-        优化为 n-gram 粗定位 + 编辑距离精定位 + 降阈值阶梯策略。
+        降阈值阶梯策略（issue #10 要求 6）：
+          1. 精确子串匹配（confidence=1.0，对应阈值 0.70）
+          2. difflib 模糊匹配，confidence >= 0.50 接受
+          3. difflib 模糊匹配，confidence >= 0.30 接受（带 warning）
+          4. 关键词兜底：从 segment 提取特征词在 aligned.text 搜索
 
         Args:
             segment_text: 待定位的文字段
@@ -197,38 +205,142 @@ class ContentExtractor:
             (start_time, end_time, start_idx, end_idx)
             定位失败返回 (0.0, 0.0, -1, -1)
         """
-        if not segment_text or len(segment_text) < 10:
+        if not segment_text or len(segment_text) < self.MIN_SEGMENT_LEN:
             logger.warning(f"[ContentExtractor] 文字段过短({len(segment_text)}字)，跳过定位")
             return 0.0, 0.0, -1, -1
 
-        # 用 difflib 在 aligned.text 中查找最佳匹配
-        matcher = difflib.SequenceMatcher(None, segment_text, aligned.text[search_start:])
-        match = matcher.find_longest_match(0, len(segment_text), 0, len(aligned.text) - search_start)
+        # 策略1：精确子串匹配（confidence=1.0 >= 0.70）
+        pos = aligned.text.find(segment_text, search_start)
+        if pos >= 0:
+            start_idx = pos
+            end_idx = pos + len(segment_text)
+            start_time, end_time = aligned.get_time_range(start_idx, end_idx)
+            logger.debug(
+                f"[ContentExtractor] 精确匹配: idx[{start_idx}:{end_idx}], "
+                f"time[{start_time:.2f}:{end_time:.2f}], confidence=1.00"
+            )
+            return start_time, end_time, start_idx, end_idx
 
-        if match.size == 0:
-            logger.warning(f"[ContentExtractor] 文字段无法定位（匹配长度=0）")
+        # 策略2/3：difflib 模糊匹配 + 阈值阶梯
+        matcher = difflib.SequenceMatcher(
+            None, segment_text, aligned.text[search_start:]
+        )
+        match = matcher.find_longest_match(
+            0, len(segment_text), 0, len(aligned.text) - search_start
+        )
+
+        if match.size > 0:
+            confidence = match.size / len(segment_text)
+            if confidence >= self.MATCH_THRESHOLD_MEDIUM:
+                level = "中阈值"
+            elif confidence >= self.MATCH_THRESHOLD_LOW:
+                level = "低阈值(警告)"
+                logger.warning(
+                    f"[ContentExtractor] 文字段定位置信度低({confidence:.2f})，"
+                    f"匹配{match.size}/{len(segment_text)}字"
+                )
+            else:
+                # 低于 0.30，转关键词兜底
+                logger.info(
+                    f"[ContentExtractor] difflib 置信度({confidence:.2f}) < "
+                    f"{self.MATCH_THRESHOLD_LOW}，转关键词兜底"
+                )
+                return self._locate_by_keywords(segment_text, aligned, search_start)
+
+            start_idx = search_start + match.b
+            end_idx = min(start_idx + len(segment_text), len(aligned.text))
+            start_time, end_time = aligned.get_time_range(start_idx, end_idx)
+            logger.debug(
+                f"[ContentExtractor] {level}匹配: idx[{start_idx}:{end_idx}], "
+                f"time[{start_time:.2f}:{end_time:.2f}], confidence={confidence:.2f}"
+            )
+            return start_time, end_time, start_idx, end_idx
+
+        # difflib 匹配长度=0，关键词兜底
+        return self._locate_by_keywords(segment_text, aligned, search_start)
+
+    def _extract_keywords(self, segment_text: str) -> List[str]:
+        """从文字段提取特征词，用于关键词兜底定位
+
+        - 数字串、字母串：直接提取（连续 >=2）
+        - 中文段：切 3-gram 滑动窗口（连续中文 >=3 字时切分，
+          2 字段直接作为关键词）
+
+        按长度降序 + 去重（保留首次出现顺序）。
+
+        Args:
+            segment_text: 待提取的文字段
+
+        Returns:
+            特征词列表
+        """
+        keywords: List[str] = []
+        # 数字串（连续 >=2 位）
+        keywords.extend(re.findall(r'\d{2,}', segment_text))
+        # 字母串（连续 >=2 字）
+        keywords.extend(re.findall(r'[A-Za-z]{2,}', segment_text))
+        # 中文：对每个连续中文段切 3-gram
+        for m in re.finditer(r'[\u4e00-\u9fa5]+', segment_text):
+            cn_seg = m.group()
+            if len(cn_seg) >= 3:
+                for i in range(len(cn_seg) - 2):
+                    keywords.append(cn_seg[i:i + 3])
+            elif len(cn_seg) >= self.KEYWORD_MIN_LEN:
+                keywords.append(cn_seg)
+        # 按长度降序 + 去重（保留顺序）
+        seen = set()
+        unique: List[str] = []
+        for kw in sorted(keywords, key=len, reverse=True):
+            if kw not in seen:
+                seen.add(kw)
+                unique.append(kw)
+        return unique
+
+    def _locate_by_keywords(
+        self,
+        segment_text: str,
+        aligned: AlignedTranscript,
+        search_start: int,
+    ) -> Tuple[float, float, int, int]:
+        """关键词兜底定位（issue #10 要求 6 兜底策略）
+
+        从 segment 提取特征词，在 aligned.text 中搜索首个命中位置，
+        作为 segment 的起始位置。end_idx 估算为 start_idx + len(segment)。
+
+        Args:
+            segment_text: 待定位的文字段
+            aligned: 纠错后对齐的文本
+            search_start: 搜索起始位置（顺序约束）
+
+        Returns:
+            (start_time, end_time, start_idx, end_idx)
+            定位失败返回 (0.0, 0.0, -1, -1)
+        """
+        keywords = self._extract_keywords(segment_text)
+        if not keywords:
+            logger.warning(
+                f"[ContentExtractor] 关键词兜底失败：segment 无特征词，"
+                f"segment={segment_text[:30]}..."
+            )
             return 0.0, 0.0, -1, -1
 
-        # 匹配置信度
-        confidence = match.size / len(segment_text)
-        if confidence < 0.3:
-            logger.warning(
-                f"[ContentExtractor] 文字段定位置信度低({confidence:.2f})，"
-                f"匹配{match.size}/{len(segment_text)}字"
-            )
+        for kw in keywords:
+            pos = aligned.text.find(kw, search_start)
+            if pos >= 0:
+                start_idx = pos
+                end_idx = min(start_idx + len(segment_text), len(aligned.text))
+                start_time, end_time = aligned.get_time_range(start_idx, end_idx)
+                logger.info(
+                    f"[ContentExtractor] 关键词兜底命中: '{kw}' @ idx[{start_idx}], "
+                    f"time[{start_time:.2f}:{end_time:.2f}]"
+                )
+                return start_time, end_time, start_idx, end_idx
 
-        start_idx = search_start + match.b
-        end_idx = start_idx + len(segment_text)
-        end_idx = min(end_idx, len(aligned.text))
-
-        # 通过 aligned.get_time_range 回溯时间戳
-        start_time, end_time = aligned.get_time_range(start_idx, end_idx)
-
-        logger.debug(
-            f"[ContentExtractor] 定位: idx[{start_idx}:{end_idx}], "
-            f"time[{start_time:.2f}:{end_time:.2f}], confidence={confidence:.2f}"
+        logger.warning(
+            f"[ContentExtractor] 关键词兜底失败：{len(keywords)} 个特征词均未命中，"
+            f"segment={segment_text[:30]}..."
         )
-        return start_time, end_time, start_idx, end_idx
+        return 0.0, 0.0, -1, -1
 
     def _locate_knowledge_points(
         self,
