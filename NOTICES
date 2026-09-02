@@ -1,0 +1,33 @@
+This product includes software developed by third parties.
+
+The following third-party components are used via pip dependencies:
+
+| Component | License | Homepage |
+|-----------|---------|----------|
+| PyYAML | MIT | https://github.com/yaml/pyyaml |
+| PyTorch (torch, torchaudio) | BSD-3-Clause | https://github.com/pytorch/pytorch |
+| PaddlePaddle (paddlepaddle-gpu) | Apache-2.0 | https://github.com/PaddlePaddle/Paddle |
+| PaddleOCR | Apache-2.0 | https://github.com/PaddlePaddle/PaddleOCR |
+| PaddleX | Apache-2.0 | https://github.com/PaddlePaddle/PaddleX |
+| OpenCV (opencv-contrib-python) | Apache-2.0 | https://github.com/opencv/opencv |
+| FunASR | Apache-2.0 | https://github.com/modelscope/FunASR |
+| LiteLLM | MIT | https://github.com/BerriAI/litellm |
+| tenacity | Apache-2.0 | https://github.com/jd/tenacity |
+| Pillow | HPND (PIL License) | https://github.com/python-pillow/Pillow |
+| NumPy | BSD-3-Clause | https://github.com/numpy/numpy |
+| tqdm | MPL-2.0 | https://github.com/tqdm/tqdm |
+| psutil | BSD-3-Clause | https://github.com/giampaolo/psutil |
+| pytest | MIT | https://github.com/pytest-dev/pytest |
+| pytest-cov | MIT | https://github.com/pytest-dev/pytest-cov |
+
+The following pre-trained model weights are loaded at runtime (not distributed):
+
+| Model | Provider | License |
+|-------|----------|---------|
+| paraformer-zh | FunASR / ModelScope | Apache-2.0 |
+| fsmn-vad | FunASR / ModelScope | Apache-2.0 |
+| ct-punc | FunASR / ModelScope | Apache-2.0 |
+| PP-OCRv6 (det + rec) | PaddlePaddle | Apache-2.0 |
+| PP-FormulaNet_plus-M | PaddlePaddle | Apache-2.0 |
+
+This project is licensed under the MIT License.
