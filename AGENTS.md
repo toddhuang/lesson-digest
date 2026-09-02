@@ -68,6 +68,14 @@
 - **绝对禁止将 API Key、密钥、token 等敏感信息提交到 git**。配置文件 `config.yaml` 已在 `.gitignore` 中，只能在本地使用；模板文件 `config.example.yaml` 中 api_key 必须为空字符串。提交前必须检查 `git diff --cached` 是否包含明文密钥
 - 如果发现密钥已被提交，立即通知用户轮换密钥，并将该文件从 git 跟踪中移除（`git rm --cached`）
 
+### 开源合规规范
+
+- **引入新第三方库前必须审查 License**：确认与项目 MIT License 兼容。MIT/BSD/Apache-2.0 兼容；**禁止引入 GPL/LGPL/AGPL 等 copyleft 许可证**的依赖，除非项目整体改为对应 License
+- **License 记录在 `NOTICES` 文件**：新增 pip 依赖时，同步在 `NOTICES` 文件中追加组件名、License、Homepage 三列信息
+- **预训练模型权重同样需合规**：使用 FunASR/PaddleOCR 等模型权重时，确认其 License（通常 Apache-2.0）允许当前用途，并在 `NOTICES` 文件中声明
+- **禁止直接复制第三方源码到项目目录**：通过 pip 引用而非 vendoring。如确需内联少量代码片段，必须在代码注释中标注来源 URL 和原始 License
+- **参考第三方教程/文档写法不算复制**：按官方 API 调用方式编写适配器代码不构成衍生作品，但应在脚本/文件注释中标注参考来源
+
 ## PaddleOCR 2.8.1 关键限制（已验证）
 
 - **无官方手写体模型**：PaddleOCR 2.x 官方模型列表中没有手写体识别推理模型，`ch_PP-OCRv4_handwritten_rec_infer` 不存在（下载返回 NoSuchKey）。不要尝试使用或下载不存在的模型
